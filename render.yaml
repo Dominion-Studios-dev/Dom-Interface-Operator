@@ -2,7 +2,7 @@ services:
   - type: web
     name: Dom-Interface
     runtime: docker
-    rootDir: dom_sandbox
+    rootDir: .
     envVars:
       - key: PORT
         value: 10000

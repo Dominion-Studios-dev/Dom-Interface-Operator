@@ -1,0 +1,18 @@
+[
+    {
+        "content": "maintain my system",
+        "role": "user"
+    },
+    {
+        "content": "[PROBE: maintain]",
+        "role": "assistant"
+    },
+    {
+        "content": "nice",
+        "role": "user"
+    },
+    {
+        "content": "I'm happy to hear that. Everything seems running smoothly. What's on your mind, Master?",
+        "role": "assistant"
+    }
+]

@@ -1,0 +1,26 @@
+[
+    {
+        "id": 1,
+        "from": "crypto-winner-bot@scammail.com",
+        "subject": "!!! YOU WON 5.3 BITCOIN !!! CLAIM NOW",
+        "body": "Hey friend you won free crypto click this sketchy link right now to claim your wallet tokens immediately!!"
+    },
+    {
+        "id": 2,
+        "from": "notifications@github.com",
+        "subject": "[GitHub] Security Alert: New login detected",
+        "body": "An untrusted machine just authorized access to your Dominion-Studios repository."
+    },
+    {
+        "id": 3,
+        "from": "newsletter@marketingjunk.net",
+        "subject": "Summer Sale: 40% off shoes you don't need!",
+        "body": "Check out our latest inventory blow-out sale."
+    },
+    {
+        "id": 4,
+        "from": "team@unity.com",
+        "subject": "Important update regarding your student license",
+        "body": "Hi Ardis, your development license has been successfully extended for another year."
+    }
+]

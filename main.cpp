@@ -1,3 +1,4 @@
+#include "crow.h" // Lightweight C++ web framework
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -81,9 +82,16 @@ std::string trim(const std::string& str) {
 }
 
 // ============================================================================
-// FILE I/O LAYER
+// FILE I/O & ENVIRONMENT LAYER (UPGRADED FOR DUAL CLOUD/LOCAL SUPPORT)
 // ============================================================================
-std::string getApiKeyFromEnvFile() {
+std::string getApiKey() {
+    // 1. Try checking actual system environment variables first (ideal for cloud hosts like Render)
+    const char* env_key = std::getenv("GROQ_API_KEY");
+    if (env_key) {
+        return trim(env_key);
+    }
+
+    // 2. Fall back to reading the local .env file
     std::ifstream envFile(ENV_FILE);
     std::string line;
     if (envFile.is_open()) {
@@ -260,7 +268,7 @@ std::string processTelemetryProbes(const std::string& aiResponse) {
 }
 
 // ============================================================================
-// NETWORK LAYER
+// NETWORK LAYER (GROQ INTEGRATION)
 // ============================================================================
 std::string fireGroqRequest(const json& messagesPayload, const std::string& apiKey) {
     json requestBody;
@@ -312,12 +320,12 @@ std::string cleanOutputText(std::string text) {
 }
 
 // ============================================================================
-// ENTRY POINT
+// ENTRY POINT (CONVERTED TO ASYNC WEB API)
 // ============================================================================
 int main() {
-    std::string apiKey = getApiKeyFromEnvFile();
+    std::string apiKey = getApiKey();
     if (apiKey.empty()) {
-        std::cerr << "[CRITICAL ERROR]: Could not retrieve your GROQ_API_KEY from .env file!" << std::endl;
+        std::cerr << "[CRITICAL ERROR]: Could not retrieve your GROQ_API_KEY from environment or .env!" << std::endl;
         return 1;
     }
 
@@ -327,16 +335,41 @@ int main() {
         wipeRam.close();
     }
 
-    std::cout << "=== Dom Interface Initialized ===" << std::endl;
-    std::cout << "Core Rules, RAM, HDD, Telemetry Filter, and Probes online.\n" << std::endl;
+    crow::SimpleApp app;
 
-    std::string userInput;
-    while (true) {
-        std::cout << "You: ";
-        std::getline(std::cin, userInput);
-        if (userInput == "exit" || userInput == "quit") break;
-        if (trim(userInput).empty()) continue;
+    // Route 1: Healthcheck Endpoint
+    CROW_ROUTE(app, "/")([](){
+        return "Dom Interface API is Online and Active.";
+    });
 
+    // Route 2: Chat API Endpoint (Handles original loop logic)
+    CROW_ROUTE(app, "/chat").methods(crow::HTTPMethod::POST)([apiKey](const crow::request& req){
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            crow::response errorRes(400);
+            errorRes.body = "{\"error\": \"Malformed JSON payload\"}";
+            errorRes.set_header("Content-Type", "application/json");
+            return errorRes;
+        }
+
+        if (!body.contains("message")) {
+            crow::response errorRes(400);
+            errorRes.body = "{\"error\": \"Missing required field: 'message'\"}";
+            errorRes.set_header("Content-Type", "application/json");
+            return errorRes;
+        }
+
+        std::string userInput = body["message"];
+        if (trim(userInput).empty()) {
+            crow::response errorRes(400);
+            errorRes.body = "{\"error\": \"Message content cannot be empty\"}";
+            errorRes.set_header("Content-Type", "application/json");
+            return errorRes;
+        }
+
+        // --- Core Execution Logic (Exact logic from your console loop) ---
         updateRAM("user", userInput);
 
         json messagesArray = json::array();
@@ -352,8 +385,10 @@ int main() {
 
         std::string domReply = fireGroqRequest(messagesArray, apiKey);
         if (domReply == "ERROR_SIGNAL") {
-            std::cout << "Dom Interface: Log parser sync drop." << std::endl;
-            continue;
+            crow::response errorRes(500);
+            errorRes.body = "{\"error\": \"Dom Interface: Log parser sync drop.\"}";
+            errorRes.set_header("Content-Type", "application/json");
+            return errorRes;
         }
 
         checkAndSaveToHDD(domReply);
@@ -382,10 +417,27 @@ int main() {
         updateRAM("assistant", domReply);
 
         std::string output = cleanOutputText(domReply);
-        std::cout << "Dom Interface: " << output << "\n" << std::endl;
-        
         speakText(output);
-    }
+        // --- End of Core Execution Logic ---
 
+        // Prepare proper clean JSON response back to caller
+        json responseBody;
+        responseBody["reply"] = output;
+
+        crow::response res;
+        res.code = 200;
+        res.set_header("Content-Type", "application/json");
+        res.body = responseBody.dump();
+        return res;
+    });
+
+    // Detect Render assigned port dynamically
+    const char* port_env = std::getenv("PORT");
+    int port = port_env ? std::stoi(port_env) : 10000;
+
+    std::cout << "=== Dom Interface Initialized ===" << std::endl;
+    std::cout << "API Web Server active on port " << port << "...\n" << std::endl;
+    
+    app.port(port).multithreaded().run();
     return 0;
 }

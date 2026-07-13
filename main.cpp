@@ -1,3 +1,4 @@
+#include "crow.h" // Lightweight C++ web framework
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -312,7 +313,7 @@ std::string cleanOutputText(std::string text) {
 }
 
 // ============================================================================
-// ENTRY POINT
+// ENTRY POINT (CONVERTED TO CLOUD WEB ENDPOINT)
 // ============================================================================
 int main() {
     std::string apiKey = getApiKeyFromEnvFile();
@@ -327,16 +328,32 @@ int main() {
         wipeRam.close();
     }
 
-    std::cout << "=== Dom Interface Initialized ===" << std::endl;
-    std::cout << "Core Rules, RAM, HDD, Telemetry Filter, and Probes online.\n" << std::endl;
+    crow::SimpleApp app;
 
-    std::string userInput;
-    while (true) {
-        std::cout << "You: ";
-        std::getline(std::cin, userInput);
-        if (userInput == "exit" || userInput == "quit") break;
-        if (trim(userInput).empty()) continue;
+    // Root status route
+    CROW_ROUTE(app, "/")([](){
+        return "Dom Interface Backend Online.";
+    });
 
+    // Reworked Endpoint replacing the console inputs
+    CROW_ROUTE(app, "/chat").methods(crow::HTTPMethod::POST)([apiKey](const crow::request& req){
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (...) {
+            return crow::response(400, "Invalid JSON payload");
+        }
+
+        if (!body.contains("message")) {
+            return crow::response(400, "Missing 'message' field");
+        }
+
+        std::string userInput = body["message"];
+        if (trim(userInput).empty()) {
+            return crow::response(400, "Message cannot be empty");
+        }
+
+        // --- Core Execution Logic (Exact Copy from Original Loop) ---
         updateRAM("user", userInput);
 
         json messagesArray = json::array();
@@ -352,8 +369,7 @@ int main() {
 
         std::string domReply = fireGroqRequest(messagesArray, apiKey);
         if (domReply == "ERROR_SIGNAL") {
-            std::cout << "Dom Interface: Log parser sync drop." << std::endl;
-            continue;
+            return crow::response(500, "Dom Interface: Log parser sync drop.");
         }
 
         checkAndSaveToHDD(domReply);
@@ -382,10 +398,21 @@ int main() {
         updateRAM("assistant", domReply);
 
         std::string output = cleanOutputText(domReply);
-        std::cout << "Dom Interface: " << output << "\n" << std::endl;
-        
         speakText(output);
-    }
+        // --- End of Core Logic ---
 
+        json responseBody;
+        responseBody["reply"] = output;
+        return crow::response(responseBody.dump());
+    });
+
+    // Detect Render assigned port dynamically
+    const char* port_env = std::getenv("PORT");
+    int port = port_env ? std::stoi(port_env) : 10000;
+
+    std::cout << "=== Dom Interface Initialized ===" << std::endl;
+    std::cout << "HTTP Server running on port " << port << "...\n" << std::endl;
+    
+    app.port(port).multithreaded().run();
     return 0;
 }

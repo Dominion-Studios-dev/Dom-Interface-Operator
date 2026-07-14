@@ -1,18 +1,18 @@
 [
     {
-        "content": "maintain my system",
+        "content": "hey",
         "role": "user"
     },
     {
-        "content": "[PROBE: maintain]",
+        "content": "It is lovely to see you today, Master. What can I assist you with?",
         "role": "assistant"
     },
     {
-        "content": "nice",
+        "content": "moew\\",
         "role": "user"
     },
     {
-        "content": "I'm happy to hear that. Everything seems running smoothly. What's on your mind, Master?",
+        "content": "How can I help you today, Master?",
         "role": "assistant"
     }
 ]

@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+import sys
+import os
+import requests
+import threading
+import subprocess
+import time
+
+URL = "https://dom-interface.onrender.com/chat"
+
+# Color Codes
+GREEN = "\033[92m"
+CYAN = "\033[96m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+RESET = "\033[0m"
+BOLD = "\033[1m"
+
+# Get the absolute directory where this script is located
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+
+def show_spinner(stop_event, message="Syncing with Dom"):
+    """Runs an animated spinner in a background thread."""
+    spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    i = 0
+    while not stop_event.is_set():
+        sys.stdout.write(f"\r{GREEN}{spinner_chars[i % len(spinner_chars)]}{RESET} {message}...")
+        sys.stdout.flush()
+        time.sleep(0.08)
+        i += 1
+    sys.stdout.write("\r\033[K")
+    sys.stdout.flush()
+
+def run_real_email_cleaner():
+    """Runs your actual local email processing script and prints its live console output."""
+    print(f"\n{YELLOW}[SYSTEM] Launching local email engine...{RESET}")
+    
+    script_path = os.path.join(SCRIPT_DIR, "dom_sandbox", "plugins_archive", "process_emails.py")
+    
+    if not os.path.exists(script_path):
+        script_path = "dom_sandbox/plugins_archive/process_emails.py"
+        
+    if os.path.exists(script_path):
+        try:
+            process = subprocess.Popen(
+                ["python3", "-u", script_path],
+                stdout=sys.stdout,
+                stderr=sys.stderr
+            )
+            process.wait() 
+            print(f"\n{GREEN}✔ Local email engine execution finished successfully.{RESET}\n")
+        except Exception as e:
+            print(f"{RED}[Error running local email script]: {e}{RESET}\n")
+    else:
+        print(f"{RED}[Error]: Could not locate 'process_emails.py'!{RESET}")
+        print(f"Looked in: {os.path.abspath(script_path)}\n")
+
+def run_real_system_maintenance():
+    """Runs your actual local system maintenance script and streams the pacman/journalctl logs live."""
+    print(f"\n{YELLOW}[SYSTEM] Initiating core system maintenance script...{RESET}")
+    
+    script_path = os.path.join(SCRIPT_DIR, "dom_sandbox", "plugins_archive", "maintain_system.py")
+    
+    if not os.path.exists(script_path):
+        script_path = "dom_sandbox/plugins_archive/maintain_system.py"
+        
+    if os.path.exists(script_path):
+        try:
+            # We execute with sudo permissions since maintain_system.py runs things like pacman and journalctl
+            # Streaming outputs directly to terminal stdout
+            process = subprocess.Popen(
+                ["python3", "-u", script_path],
+                stdout=sys.stdout,
+                stderr=sys.stderr
+            )
+            process.wait()
+            print(f"\n{GREEN}✔ Local system optimization complete.{RESET}\n")
+        except Exception as e:
+            print(f"{RED}[Error running local system maintenance]: {e}{RESET}\n")
+    else:
+        print(f"{RED}[Error]: Could not locate 'maintain_system.py'!{RESET}")
+        print(f"Looked in: {os.path.abspath(script_path)}\n")
+
+def main():
+    print(f"\n{BOLD}{CYAN}=== Dom Interface Terminal v2.3 ==={RESET}")
+    print("Type 'exit' to close.\n")
+    
+    while True:
+        try:
+            user_input = input(f"{BOLD}You:{RESET} ").strip()
+            if not user_input:
+                continue
+            if user_input.lower() in ["exit", "quit"]:
+                print("Disconnecting...")
+                break
+            
+            # 1. Detect if this is an email cleanup request
+            is_email_command = any(word in user_input.lower() for word in ["email", "emails", "inbox", "mail"])
+            
+            # 2. Detect if this is a system maintenance/clean request
+            is_system_command = any(word in user_input.lower() for word in ["system", "maintenance", "optimize", "clean system"])
+            
+            if is_email_command:
+                run_real_email_cleaner()
+            elif is_system_command:
+                run_real_system_maintenance()
+
+            # Start background spinner while waiting for the remote cloud web server
+            stop_spinner = threading.Event()
+            spinner_thread = threading.Thread(target=show_spinner, args=(stop_spinner, "Awaiting Dom's response"))
+            spinner_thread.start()
+
+            try:
+                # Send API request to Render
+                response = requests.post(URL, json={"message": user_input})
+                stop_spinner.set() 
+                spinner_thread.join()
+                
+                if response.status_code == 200:
+                    reply = response.json().get("reply", "No response content.")
+                    print(f"{BOLD}{GREEN}Dom Interface:{RESET} {reply}\n")
+                else:
+                    print(f"\n{RED}[Error {response.status_code}]: Unable to reach Dom in the cloud.{RESET}\n")
+            except Exception as e:
+                stop_spinner.set()
+                spinner_thread.join()
+                raise e
+                   
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{YELLOW}Disconnected.{RESET}")
+            break
+        except Exception as e:
+            print(f"\n{RED}[Connection Error]: {e}{RESET}\n")
+
+if __name__ == "__main__":
+    main()

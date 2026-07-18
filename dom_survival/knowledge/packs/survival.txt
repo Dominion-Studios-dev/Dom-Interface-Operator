@@ -1,0 +1,72 @@
+# Survival
+
+## Finding Water in the Wild
+Water is your most critical survival need. You can survive 3 days without water.
+- Look for flowing water (streams, rivers) — moving water is generally safer
+- Collect morning dew by dragging cloth through grass and wringing it out
+- Rain collection: use any container, tarp, or large leaves
+- Avoid still water sources (ponds, puddles) when possible — higher bacteria risk
+- If you find a spring, it's usually safe to drink directly
+- Follow animal tracks — they often lead to water sources
+- Listen for running water and look for green vegetation in otherwise dry areas
+
+## Purifying Water
+Always purify water when possible, even if it looks clean.
+- Boiling: bring water to a rolling boil for at least 1 minute (3 minutes above 2000m elevation)
+- Solar disinfection (SODIS): fill clear plastic bottles, lay in direct sunlight for 6+ hours
+- Chemical treatment: household bleach — 2 drops per liter, wait 30 minutes
+- Improvised filter: layer sand, charcoal (from campfire), and gravel in a container
+- Let sediment settle first, then filter, then purify if possible
+
+## Building Shelter
+Shelter protects you from exposure, which is the #1 immediate survival threat.
+- Rule of 3s: 3 minutes without air, 3 hours without shelter (extreme weather), 3 days without water, 3 weeks without food
+- Debris lean-to: find a fallen tree or create a ridgepole, pile branches and leaves on one side
+- The thicker the debris layer, the more insulation you get — aim for 2+ feet
+- Build shelter BEFORE dark — it's much harder to build in the dark
+- Always insulate yourself from the ground — ground steals heat 25x faster than air
+- Pine needles, dry leaves, and grass make excellent insulation material
+
+## Fire Starting
+Fire provides warmth, purifies water, signals rescuers, cooks food, and deters predators.
+- Tinder: dry grass, birch bark, cedar bark, cotton balls with petroleum jelly, dryer lint
+- Kindling: pencil-thin dry sticks and twigs
+- Fuel: progressively larger sticks and logs
+- Bow drill: fastest primitive method — use soft wood (willow, cedar) for the fireboard
+- Flint and steel: reliable and works in wet conditions — strike sparks onto char cloth
+- Always gather 3x more firewood than you think you need
+- Keep fire small for conservation, big for signaling
+
+## Food Foraging
+You can survive weeks without food, but energy and morale drop quickly.
+- Universal edibility test: touch to skin, touch to lip, tiny taste, wait 15 min — if no reaction, small amount and wait 8 hours
+- Avoid: mushrooms unless expert ID, berries unless certain ID, plants with milky sap
+- Generally safe: dandelions (all parts), cattail (roots, shoots, pollen), clover
+- Insects: grasshoppers (remove legs/wings), ants, grubs — high protein, cook when possible
+- Fish: make hooks from thorns, line from plant fibers or paracord inner strands
+- Berries: avoid white and yellow berries (usually toxic), blue and black are often safe
+
+## Navigation Without a Compass
+- Sun rises in the east, sets in the west (approximate, varies by season)
+- Shadow stick method: place stick in ground, mark shadow tip, wait 15 min, mark again — line between marks points roughly east-west
+- North Star (Polaris): find Big Dipper, extend the line from the two front stars — Polaris is at the end
+- Southern Cross: for southern hemisphere — extend the long axis 4.5x down to find south
+- Moss typically grows on the north side of trees in the northern hemisphere (not always reliable)
+- Follow water downstream — rivers lead to civilization
+
+## Emergency Signaling
+- Three fires in a triangle = international distress signal
+- Mirror flash: can be seen 50+ miles away in sunlight
+- Bright clothing or gear placed in open areas
+- SOS: three short, three long, three short (any medium — whistle, light, sound)
+- Whistle: three blasts = distress signal, carry one always
+- Stay in one place if lost — rescue teams search systematically
+- Create large ground signals: use rocks, logs, or trampled snow to spell HELP
+
+## Knots Every Survivor Should Know
+- Bowline: creates a fixed loop that won't slip — rescue, anchoring
+- Clove hitch: quick attachment to a pole or tree — shelter building
+- Taut-line hitch: adjustable loop — tent guy lines
+- Figure-eight: stopper knot, prevents rope from pulling through
+- Sheet bend: joining two ropes of different sizes
+- Practice these before you need them — cold hands make knots harder

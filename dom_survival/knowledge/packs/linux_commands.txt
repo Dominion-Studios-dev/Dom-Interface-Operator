@@ -1,0 +1,97 @@
+# Linux Commands
+
+## System Information
+- `uname -a` — show all system information (kernel, architecture)
+- `hostname` — show computer name
+- `uptime` — how long the system has been running
+- `lsb_release -a` — Linux distribution info
+- `cat /proc/cpuinfo` — CPU information
+- `cat /proc/meminfo` — memory information
+- `df -h` — disk space usage (human readable)
+- `du -sh *` — directory sizes
+- `free -h` — RAM and swap usage
+- `lscpu` — detailed CPU info
+- `lsblk` — list block devices (disks, partitions)
+
+## File Operations
+- `ls -la` — list all files with details
+- `cp -r source dest` — copy directory recursively
+- `mv source dest` — move or rename files
+- `rm -rf directory` — remove directory recursively (CAREFUL)
+- `find / -name "*.txt" 2>/dev/null` — find files by name
+- `locate filename` — fast file search (uses database)
+- `chmod 755 file` — change file permissions
+- `chown user:group file` — change file ownership
+- `ln -s target linkname` — create symbolic link
+- `tar -czf archive.tar.gz directory` — create compressed archive
+- `tar -xzf archive.tar.gz` — extract compressed archive
+
+## Process Management
+- `ps aux` — list all running processes
+- `top` or `htop` — interactive process viewer
+- `kill PID` — terminate a process
+- `kill -9 PID` — force terminate a process
+- `pkill name` — kill processes by name
+- `pgrep name` — find process ID by name
+- `nohup command &` — run command in background, survives logout
+- `systemctl status service` — check service status
+- `systemctl start/stop/restart service` — manage services
+
+## Network
+- `ip addr` or `ifconfig` — show network interfaces
+- `ip route` — show routing table
+- `ping host` — test connectivity
+- `curl url` — make HTTP requests
+- `wget url` — download files
+- `ss -tlnp` — show listening ports
+- `netstat -tlnp` — show listening ports (older)
+- `ssh user@host` — remote login
+- `scp file user@host:path` — copy files over SSH
+- `rsync -avz source dest` — efficient file sync
+
+## Disk Management
+- `mount /dev/sdX1 /mnt` — mount a partition
+- `umount /mnt` — unmount a partition
+- `fdisk -l` — list partitions
+- `mkfs.ext4 /dev/sdX1` — format partition as ext4
+- `fsck /dev/sdX1` — check filesystem for errors
+- `dd if=/dev/zero of=/dev/sdX bs=1M count=100` — write zeros to disk (DESTRUCTIVE)
+
+## Package Management (Arch/Manjaro)
+- `pacman -S package` — install package
+- `pacman -R package` — remove package
+- `pacman -Rns package` — remove package and dependencies
+- `pacman -Syu` — update all packages
+- `pacman -Ss keyword` — search for packages
+- `pacman -Qi package` — show package info
+- `yay -S package` — install from AUR
+- `paccache -r` — clean package cache
+
+## Text Processing
+- `grep "pattern" file` — search for text in file
+- `grep -r "pattern" directory/` — recursive search
+- `sed 's/old/new/g' file` — find and replace
+- `awk '{print $1}' file` — print first column
+- `sort file` — sort lines
+- `uniq -c` — count unique lines (usually after sort)
+- `wc -l file` — count lines
+- `head -n 20 file` — first 20 lines
+- `tail -n 20 file` — last 20 lines
+- `tail -f /var/log/syslog` — follow log file in real time
+
+## Permissions Explained
+- `r` (read) = 4, `w` (write) = 2, `x` (execute) = 1
+- `chmod 755` = owner(rwx), group(r-x), others(r-x)
+- `chmod 644` = owner(rw-), group(r--), others(r--)
+- `chmod 600` = owner(rw-), no access for others
+- `chmod +x script.sh` — make script executable
+
+## Useful One-Liners
+- `history | grep command` — search command history
+- `watch -n 2 command` — repeat command every 2 seconds
+- `command1 && command2` — run command2 only if command1 succeeds
+- `command1 || command2` — run command2 only if command1 fails
+- `command1 | command2` — pipe output of command1 to command2
+- `command > file.txt 2>&1` — redirect all output to file
+- `crontab -e` — schedule recurring tasks
+- `alias ll='ls -la'` — create command shortcut

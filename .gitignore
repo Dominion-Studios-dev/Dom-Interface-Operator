@@ -1,0 +1,34 @@
+# Compiled binaries
+/main
+/dom
+/dom_interface
+*.o
+dom_cloud/main
+
+# Old project files (preserved but not tracked)
+dom_sandbox/
+.crow*
+
+# Generated files
+.voice.mp3
+voice.mp3
+
+# Environment (secrets)
+.env
+dom_cloud/.env
+
+# Runtime memory (user-specific)
+dom_cloud/memory/
+dom_survival/memory/
+
+# Knowledge base (generated)
+dom_survival/knowledge/survival.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db

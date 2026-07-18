@@ -130,6 +130,11 @@
         "temu <temu@orders.temu.com>",
         "google <no-reply@accounts.google.com>",
         "netlify <team@netlify.com>",
-        "unisynth <team@unison.audio>"
+        "unisynth <team@unison.audio>",
+        "the browserless team <support@browserless.io>",
+        "trading 212 <no-reply@info.trading212.com>",
+        "the google cloud arcade team <arcade-noreply@google.com>",
+        "outschool <support@outschool.com>",
+        "amazon web services <aws-marketing-email-replies@amazon.com>"
     ]
 }

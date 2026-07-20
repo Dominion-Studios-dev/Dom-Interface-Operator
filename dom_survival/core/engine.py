@@ -124,20 +124,8 @@ def embedded_rules_response(message: str) -> str:
 
 
 def get_api_key() -> str:
-    """Get Groq API key from environment or .env file."""
-    env_key = os.environ.get("GROQ_API_KEY")
-    if env_key:
-        return env_key.strip()
-
-    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-    try:
-        with open(env_path, "r") as f:
-            for line in f:
-                if line.strip().startswith("GROQ_API_KEY="):
-                    return line.strip().split("=", 1)[1].strip()
-    except FileNotFoundError:
-        pass
-    return ""
+    """Get Groq API key from environment variables only."""
+    return os.environ.get("GROQ_API_KEY", "").strip()
 
 
 def infer(message: str) -> str:

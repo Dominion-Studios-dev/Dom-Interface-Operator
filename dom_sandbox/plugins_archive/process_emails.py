@@ -12,37 +12,17 @@ import sys
 # Dynamically find exact absolute paths based on where this file is stored
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))  # dom_sandbox/plugins_archive
 SANDBOX_DIR = os.path.dirname(PLUGIN_DIR)                # dom_sandbox
-PROJECT_ROOT = os.path.dirname(SANDBOX_DIR)              # Dom_J (root folder containing .env)
+PROJECT_ROOT = os.path.dirname(SANDBOX_DIR)              # Dom_J
 
 HDD_PATH = os.path.join(SANDBOX_DIR, "core_memory", "dom_hdd.json")
 TXT_OUTPUT_PATH = os.path.join(SANDBOX_DIR, "important_emails.txt")
-ENV_PATH = os.path.join(PROJECT_ROOT, ".env")
 MEMORY_CACHE_PATH = os.path.join(SANDBOX_DIR, "core_memory", "email_filters_memory.json")
 
-# Initialize credential variables
-EMAIL_USER = None
-EMAIL_PASS = None
-IMAP_SERVER = None
-GROQ_API_KEY = None
-
-if os.path.exists(ENV_PATH):
-    with open(ENV_PATH, "r") as f:
-        for line in f:
-            line_stripped = line.strip()
-            if not line_stripped or line_stripped.startswith("#"):
-                continue
-            if "=" in line_stripped:
-                key, val = line_stripped.split("=", 1)
-                key = key.strip()
-                val = val.strip()
-                if key == "EMAIL_USER":
-                    EMAIL_USER = val
-                elif key == "EMAIL_PASS":
-                    EMAIL_PASS = val
-                elif key == "EMAIL_IMAP_SERVER":
-                    IMAP_SERVER = val
-                elif key == "GROQ_API_KEY":
-                    GROQ_API_KEY = val
+# Read credentials exclusively from environment variables
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASS")
+IMAP_SERVER = os.getenv("EMAIL_IMAP_SERVER")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 def clean_text(text):
     return "".join(c for c in text if 32 <= ord(c) <= 126 or c in "\n\t")

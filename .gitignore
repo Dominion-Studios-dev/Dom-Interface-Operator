@@ -16,6 +16,8 @@ voice.mp3
 # Environment (secrets)
 .env
 dom_cloud/.env
+.env.*
+!.env.example
 
 # Runtime memory (user-specific)
 dom_cloud/memory/
@@ -24,10 +26,19 @@ dom_survival/memory/
 # Knowledge base (generated)
 dom_survival/knowledge/survival.db
 
+# Logs
+*.log
+logs/
+
 # Python
 __pycache__/
 *.pyc
 *.pyo
+
+# Build artifacts
+build/
+dist/
+*.class
 
 # OS
 .DS_Store

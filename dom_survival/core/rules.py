@@ -3,7 +3,9 @@
 import os
 
 def _rules_path():
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dom_rules.txt")
+    # Reference shared/ as single source of truth
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, "..", "shared", "dom_rules.txt")
 
 DEFAULT_RULES = "You are Dom Interface, a loyal desktop AI assistant for Master Ardis."
 

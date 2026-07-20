@@ -6,8 +6,9 @@ import json
 
 
 def load_commands():
-    """Load dom_commands.json."""
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dom_commands.json")
+    """Load dom_commands.json from shared/ (single source of truth)."""
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(base, "..", "shared", "dom_commands.json")
     try:
         with open(path, "r") as f:
             return json.load(f)

@@ -1,4 +1,4 @@
-#include "crow.h" // Lightweight C++ web framework
+#include "crow_all.h" // Lightweight C++ web framework
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -15,11 +15,10 @@ using json = nlohmann::json;
 // ============================================================================
 // CORE CONFIGURATION & CONSTANTS (SANDBOX LOCKED)
 // ============================================================================
-const std::string ENV_FILE = ".env";
-const std::string RULES_FILE = "dom_rules.txt";
 const std::string RAM_FILE = "dom_sandbox/core_memory/dom_ram.json";
 const std::string HDD_FILE = "dom_sandbox/core_memory/dom_hdd.json";
-const std::string COMMANDS_FILE = "dom_sandbox/dom_commands.json";
+const std::string COMMANDS_FILE = "shared/dom_commands.json";
+const std::string RULES_FILE = "shared/dom_rules.txt";
 const std::string REQUEST_FILE = "dom_sandbox/core_memory/.request.json";
 const std::string RESPONSE_FILE = "dom_sandbox/core_memory/.response.json";
 const size_t MAX_RAM_LINES = 12;
@@ -67,7 +66,7 @@ void speakText(const std::string& text) {
         }
     }
     
-    std::string ttsCommand = "edge-tts --voice en-US-BrianNeural --rate=+15% --text \"" + safeVoiceText + "\" --write-media .voice.mp3 && mpv --volume=140 .voice.mp3 > /dev/null 2>&1 &";
+    std::string ttsCommand = "edge-tts --voice en-US-BrianNeural --rate=+15% --text \"" + safeVoiceText + "\" --write-media \".voice.mp3\" && mpv --volume=140 \".voice.mp3\" > /dev/null 2>&1 &";
     std::system(ttsCommand.c_str());
 }
 
@@ -85,23 +84,9 @@ std::string trim(const std::string& str) {
 // FILE I/O & ENVIRONMENT LAYER (UPGRADED FOR DUAL CLOUD/LOCAL SUPPORT)
 // ============================================================================
 std::string getApiKey() {
-    // 1. Try checking actual system environment variables first (ideal for cloud hosts like Render)
     const char* env_key = std::getenv("GROQ_API_KEY");
     if (env_key) {
         return trim(env_key);
-    }
-
-    // 2. Fall back to reading the local .env file
-    std::ifstream envFile(ENV_FILE);
-    std::string line;
-    if (envFile.is_open()) {
-        while (getline(envFile, line)) {
-            if (line.find("GROQ_API_KEY=") == 0) {
-                std::string key = line.substr(13);
-                return trim(key);
-            }
-        }
-        envFile.close();
     }
     return "";
 }
@@ -283,7 +268,7 @@ std::string fireGroqRequest(const json& messagesPayload, const std::string& apiK
     std::string command = "curl -X POST \"https://api.groq.com/openai/v1/chat/completions\" "
                           "-H \"Authorization: Bearer " + apiKey + "\" "
                           "-H \"Content-Type: application/json\" "
-                          "-d @" + REQUEST_FILE + " > " + RESPONSE_FILE + " 2>/dev/null";
+                          "-d @\"" + REQUEST_FILE + "\" > \"" + RESPONSE_FILE + "\" 2>/dev/null";
     
     std::system(command.c_str());
 
@@ -325,7 +310,7 @@ std::string cleanOutputText(std::string text) {
 int main() {
     std::string apiKey = getApiKey();
     if (apiKey.empty()) {
-        std::cerr << "[CRITICAL ERROR]: Could not retrieve your GROQ_API_KEY from environment or .env!" << std::endl;
+        std::cerr << "[CRITICAL ERROR]: GROQ_API_KEY not found in environment variables!" << std::endl;
         return 1;
     }
 
@@ -340,6 +325,15 @@ int main() {
     // Route 1: Healthcheck Endpoint
     CROW_ROUTE(app, "/")([](){
         return "Dom Interface API is Online and Active.";
+    });
+
+    // Route 2: Ping Endpoint (lightweight health check for Hugging Face / Docker)
+    CROW_ROUTE(app, "/ping")([](){
+        crow::response res;
+        res.code = 200;
+        res.set_header("Content-Type", "application/json");
+        res.body = "{\"status\": \"alive\", \"engine\": \"Dom C++ Core\"}";
+        return res;
     });
 
     // Route 2: Chat API Endpoint (Handles original loop logic)
@@ -431,13 +425,13 @@ int main() {
         return res;
     });
 
-    // Detect Render assigned port dynamically
+    // Detect Render/Hugging Face assigned port dynamically
     const char* port_env = std::getenv("PORT");
-    int port = port_env ? std::stoi(port_env) : 10000;
+    int port = port_env ? std::stoi(port_env) : 7860;
 
     std::cout << "=== Dom Interface Initialized ===" << std::endl;
-    std::cout << "API Web Server active on port " << port << "...\n" << std::endl;
+    std::cout << "API Web Server active on 0.0.0.0:" << port << "...\n" << std::endl;
     
-    app.port(port).multithreaded().run();
+    app.bindaddr("0.0.0.0").port(port).multithreaded().run();
     return 0;
 }

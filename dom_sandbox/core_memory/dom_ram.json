@@ -1,18 +1,1 @@
-[
-    {
-        "content": "hey",
-        "role": "user"
-    },
-    {
-        "content": "It is lovely to see you today, Master. What can I assist you with?",
-        "role": "assistant"
-    },
-    {
-        "content": "moew\\",
-        "role": "user"
-    },
-    {
-        "content": "How can I help you today, Master?",
-        "role": "assistant"
-    }
-]
+[]

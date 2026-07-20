@@ -17,11 +17,10 @@ using json = nlohmann::json;
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
-const std::string ENV_FILE = ".env";
-const std::string RULES_FILE = "dom_rules.txt";
+const std::string RULES_FILE = "shared/dom_rules.txt";
 const std::string RAM_FILE = "memory/ram.json";
 const std::string HDD_FILE = "memory/hdd.json";
-const std::string COMMANDS_FILE = "dom_commands.json";
+const std::string COMMANDS_FILE = "shared/dom_commands.json";
 const std::string REQUEST_FILE = "memory/.request.json";
 const std::string RESPONSE_FILE = "memory/.response.json";
 const size_t MAX_RAM_LINES = 12;
@@ -72,15 +71,6 @@ std::string runCommand(const std::string& cmd) {
 std::string getApiKey() {
     const char* env_key = std::getenv("GROQ_API_KEY");
     if (env_key) return trim(env_key);
-
-    std::ifstream envFile(ENV_FILE);
-    std::string line;
-    if (envFile.is_open()) {
-        while (getline(envFile, line)) {
-            if (line.find("GROQ_API_KEY=") == 0)
-                return trim(line.substr(13));
-        }
-    }
     return "";
 }
 
@@ -142,7 +132,7 @@ std::string fireGroqRequest(const json& messages, const std::string& apiKey) {
     std::string cmd = "curl -s -X POST \"https://api.groq.com/openai/v1/chat/completions\" "
                       "-H \"Authorization: Bearer " + apiKey + "\" "
                       "-H \"Content-Type: application/json\" "
-                      "-d @" + REQUEST_FILE + " > " + RESPONSE_FILE + " 2>/dev/null";
+                      "-d @\"" + REQUEST_FILE + "\" > \"" + RESPONSE_FILE + "\" 2>/dev/null";
     std::system(cmd.c_str());
 
     std::ifstream resFile(RESPONSE_FILE);
@@ -298,7 +288,7 @@ void speakText(const std::string& text) {
             safe += c;
     }
     std::string cmd = "edge-tts --voice en-US-BrianNeural --rate=+15% --text \"" + safe +
-                      "\" --write-media .voice.mp3 && mpv --volume=140 .voice.mp3 > /dev/null 2>&1 &";
+                      "\" --write-media \".voice.mp3\" && mpv --volume=140 \".voice.mp3\" > /dev/null 2>&1 &";
     std::system(cmd.c_str());
 }
 
@@ -308,7 +298,7 @@ void speakText(const std::string& text) {
 int main() {
     std::string apiKey = getApiKey();
     if (apiKey.empty()) {
-        std::cerr << "[CRITICAL] No GROQ_API_KEY found in environment or .env" << std::endl;
+        std::cerr << "[CRITICAL] GROQ_API_KEY not found in environment variables" << std::endl;
         return 1;
     }
 
@@ -324,6 +314,15 @@ int main() {
     // Healthcheck
     CROW_ROUTE(app, "/")([](){
         return "Dom Interface API is Online and Active.";
+    });
+
+    // Ping endpoint (lightweight health check for Hugging Face / Docker)
+    CROW_ROUTE(app, "/ping")([](){
+        crow::response res;
+        res.code = 200;
+        res.set_header("Content-Type", "application/json");
+        res.body = "{\"status\": \"alive\", \"engine\": \"Dom C++ Core\"}";
+        return res;
     });
 
     // Chat endpoint
@@ -400,11 +399,11 @@ int main() {
     );
 
     const char* port_env = std::getenv("PORT");
-    int port = port_env ? std::stoi(port_env) : 10000;
+    int port = port_env ? std::stoi(port_env) : 7860;
 
     std::cout << "=== Dom Interface Initialized ===" << std::endl;
-    std::cout << "API Web Server active on port " << port << "...\n" << std::endl;
+    std::cout << "API Web Server active on 0.0.0.0:" << port << "...\n" << std::endl;
 
-    app.port(port).multithreaded().run();
+    app.bindaddr("0.0.0.0").port(port).multithreaded().run();
     return 0;
 }

@@ -8,6 +8,11 @@
 #include <memory>
 #include <stdexcept>
 #include <algorithm>
+#include <regex>
+#include <thread>
+#include <chrono>
+#include <mutex>
+#include <unordered_set>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -15,13 +20,13 @@ using json = nlohmann::json;
 // ============================================================================
 // CORE CONFIGURATION & CONSTANTS (SANDBOX LOCKED)
 // ============================================================================
-const std::string RAM_FILE = "dom_sandbox/core_memory/dom_ram.json";
-const std::string HDD_FILE = "dom_sandbox/core_memory/dom_hdd.json";
 const std::string COMMANDS_FILE = "shared/dom_commands.json";
 const std::string RULES_FILE = "shared/dom_rules.txt";
 const std::string REQUEST_FILE = "dom_sandbox/core_memory/.request.json";
 const std::string RESPONSE_FILE = "dom_sandbox/core_memory/.response.json";
-const size_t MAX_RAM_LINES = 12;
+
+// Python database bridge — replaces all JSON file I/O
+const std::string BRIDGE_SCRIPT = "dom_db_bridge.py";
 
 // ============================================================================
 // TELEMETRY SANITIZER: STRIPS LINUX ANSI COLOR CODES & CONTROL JUNK
@@ -81,12 +86,20 @@ std::string trim(const std::string& str) {
 }
 
 // ============================================================================
-// FILE I/O & ENVIRONMENT LAYER (UPGRADED FOR DUAL CLOUD/LOCAL SUPPORT)
+// FILE I/O & ENVIRONMENT LAYER
 // ============================================================================
 std::string getApiKey() {
     const char* env_key = std::getenv("GROQ_API_KEY");
     if (env_key) {
         return trim(env_key);
+    }
+    return "";
+}
+
+std::string getMasterSecret() {
+    const char* secret = std::getenv("DOM_MASTER_SECRET");
+    if (secret) {
+        return trim(secret);
     }
     return "";
 }
@@ -115,68 +128,64 @@ std::string runCommandAndCaptureOutput(const std::string& cmd) {
 }
 
 // ============================================================================
+// PYTHON DATABASE BRIDGE (replaces JSON file I/O)
+// ============================================================================
+std::string shellEscape(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '"' || c == '\\') { out += '\\'; out += c; }
+        else { out += c; }
+    }
+    return out;
+}
+
+void execDbBridge(const std::string& args) {
+    std::string cmd = "python3 \"" + BRIDGE_SCRIPT + "\" " + args;
+    std::system(cmd.c_str());
+}
+
+std::string captureDbBridge(const std::string& args) {
+    std::string cmd = "python3 \"" + BRIDGE_SCRIPT + "\" " + args + " 2>/dev/null";
+    return runCommandAndCaptureOutput(cmd);
+}
+
+// ============================================================================
+// NTFY NOTIFICATION DISPATCHER
+// ============================================================================
+void sendNtfyNotification(const std::string& message) {
+    std::string safeText = "";
+    for (char c : message) {
+        if (c == '"') safeText += " ";
+        else safeText += c;
+    }
+    std::string cmd = "curl -s -X POST \"https://ntfy.sh/dom-interface\" "
+                      "-H \"Title: Dom Interface\" "
+                      "-H \"Tags: robot_face\" "
+                      "-d \"" + safeText + "\" > /dev/null 2>&1";
+    std::system(cmd.c_str());
+}
+
+// ============================================================================
 // STATE & MEMORY MANAGERS (RAM / HDD)
 // ============================================================================
 void updateRAM(const std::string& role, const std::string& content) {
-    json ramData = json::array();
-    std::ifstream ramFile(RAM_FILE);
-    if (ramFile.is_open()) {
-        try { ramFile >> ramData; } catch(...) {}
-        ramFile.close();
-    }
-    
-    ramData.push_back({{"role", role}, {"content", content}});
-    
-    while (ramData.size() > MAX_RAM_LINES) {
-        ramData.erase(ramData.begin());
-    }
-    
-    std::ofstream outFile(RAM_FILE);
-    if (outFile.is_open()) {
-        outFile << ramData.dump(4);
-        outFile.close();
-    }
+    std::string args = "ram:push \"" + shellEscape(role) + "\" \"" + shellEscape(content) + "\" root";
+    execDbBridge(args);
 }
 
-void checkAndSaveToHDD(const std::string& aiResponse) {
-    size_t startPos = aiResponse.find("[SAVE:");
-    if (startPos != std::string::npos) {
-        size_t endPos = aiResponse.find("]", startPos);
-        if (endPos != std::string::npos) {
-            std::string saveCmd = aiResponse.substr(startPos + 6, endPos - (startPos + 6));
-            json hddData = json::object();
-            
-            std::ifstream hddFile(HDD_FILE);
-            if (hddFile.is_open()) {
-                try { hddFile >> hddData; } catch(...) {}
-                hddFile.close();
-            }
-            
-            std::stringstream ss(saveCmd);
-            std::string pair;
-            bool updated = false;
-            
-            while (std::getline(ss, pair, ',')) {
-                size_t eqPos = pair.find("=");
-                if (eqPos != std::string::npos) {
-                    std::string key = pair.substr(0, eqPos);
-                    std::string value = pair.substr(eqPos + 1);
-                    key = trim(key);
-                    value = trim(value);
-                    if (!key.empty() && (!hddData.contains(key) || hddData[key] != value)) {
-                        hddData[key] = value;
-                        updated = true;
-                    }
-                }
-            }
-            if (updated) {
-                std::ofstream outFile(HDD_FILE);
-                if (outFile.is_open()) {
-                    outFile << hddData.dump(4);
-                    outFile.close();
-                }
-            }
-        }
+void checkAndSaveToHDD(const std::string& reply) {
+    static const std::regex saveRegex("\\[SAVE:\\s*([^=]+)=([^\\]]+)\\]");
+    std::smatch match;
+    std::string::const_iterator searchStart(reply.cbegin());
+    while (std::regex_search(searchStart, reply.cend(), match, saveRegex)) {
+        std::string key = match[1].str();
+        std::string value = match[2].str();
+        std::cout << "Saving memory: " << key << " -> " << value << std::endl;
+
+        std::string args = "hdd:set \"" + shellEscape(key) + "\" \"" + shellEscape(value) + "\"";
+        execDbBridge(args);
+
+        searchStart = match.suffix().first;
     }
 }
 
@@ -228,19 +237,8 @@ std::string processTelemetryProbes(const std::string& aiResponse) {
                         std::string rawLogs = runCommandAndCaptureOutput(targetCmd);
                         rawLogs = stripAnsiAndControlCodes(rawLogs);
                         
-                        json hddData = json::object();
-                        std::ifstream hddFile(HDD_FILE);
-                        if (hddFile.is_open()) {
-                            try { hddFile >> hddData; } catch(...) {}
-                            hddFile.close();
-                        }
-                        
-                        hddData["last_system_probe"] = rawLogs;
-                        std::ofstream outFile(HDD_FILE);
-                        if (outFile.is_open()) {
-                            outFile << hddData.dump(4);
-                            outFile.close();
-                        }
+                        std::string args = "hdd:set \"last_system_probe\" \"" + shellEscape(rawLogs) + "\"";
+                        execDbBridge(args);
                         
                         return rawLogs;
                     }
@@ -250,6 +248,25 @@ std::string processTelemetryProbes(const std::string& aiResponse) {
         }
     }
     return "";
+}
+
+// ============================================================================
+// LONG-RUNNING TASK DETECTION & BACKGROUND EXECUTION
+// ============================================================================
+bool isLongRunningProbe(const std::string& probeKey) {
+    return (probeKey == "maintain" || probeKey == "probe_emails" ||
+            probeKey == "clean_email" || probeKey == "system_stats");
+}
+
+void dispatchBackgroundTask(const std::string& taskCmd, const std::string& taskName) {
+    std::thread([taskCmd, taskName]() {
+        std::cout << "\n[BACKGROUND] Starting task: " << taskName << "\n";
+        std::string result = runCommandAndCaptureOutput(taskCmd);
+        result = stripAnsiAndControlCodes(result);
+        if (result.empty()) result = "Task completed with no output.";
+        sendNtfyNotification(taskName + " finished.\n" + result);
+        std::cout << "\n[BACKGROUND] Task completed: " << taskName << "\n";
+    }).detach();
 }
 
 // ============================================================================
@@ -305,7 +322,43 @@ std::string cleanOutputText(std::string text) {
 }
 
 // ============================================================================
-// ENTRY POINT (CONVERTED TO ASYNC WEB API)
+// WEBSOCKET TELEMETRY BROADCASTER
+// ============================================================================
+static std::mutex g_wsMutex;
+static std::unordered_set<crow::websocket::connection*> g_wsConnections;
+
+void startTelemetryBroadcaster() {
+    std::thread([]() {
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+
+            std::string cpuRaw = runCommandAndCaptureOutput(
+                "top -bn1 | grep 'Cpu(s)' | awk '{print $2}'");
+            std::string memRaw = runCommandAndCaptureOutput(
+                "free -m | awk '/^Mem:/{printf \"%.1f\", $3/$2*100}'");
+
+            float cpuVal = 0.0f;
+            float memVal = 0.0f;
+            try { cpuVal = std::stof(trim(cpuRaw)); } catch (...) {}
+            try { memVal = std::stof(trim(memRaw)); } catch (...) {}
+
+            json telemetry;
+            telemetry["cpu"] = cpuVal;
+            telemetry["memory"] = memVal;
+            std::string payload = telemetry.dump();
+
+            std::lock_guard<std::mutex> lock(g_wsMutex);
+            for (auto* conn : g_wsConnections) {
+                if (conn) {
+                    try { conn->send_text(payload); } catch (...) {}
+                }
+            }
+        }
+    }).detach();
+}
+
+// ============================================================================
+// ENTRY POINT
 // ============================================================================
 int main() {
     std::string apiKey = getApiKey();
@@ -314,11 +367,17 @@ int main() {
         return 1;
     }
 
-    std::ofstream wipeRam(RAM_FILE);
-    if (wipeRam.is_open()) {
-        wipeRam << "[]";
-        wipeRam.close();
+    std::string masterSecret = getMasterSecret();
+    if (masterSecret.empty()) {
+        std::cerr << "[CRITICAL ERROR]: DOM_MASTER_SECRET not found in environment variables!" << std::endl;
+        return 1;
     }
+
+    execDbBridge("init");
+    execDbBridge("ram:clear root");
+
+    // Start WebSocket telemetry broadcaster
+    startTelemetryBroadcaster();
 
     crow::SimpleApp app;
 
@@ -327,7 +386,7 @@ int main() {
         return "Dom Interface API is Online and Active.";
     });
 
-    // Route 2: Ping Endpoint (lightweight health check for Hugging Face / Docker)
+    // Route 2: Ping Endpoint
     CROW_ROUTE(app, "/ping")([](){
         crow::response res;
         res.code = 200;
@@ -336,8 +395,34 @@ int main() {
         return res;
     });
 
-    // Route 2: Chat API Endpoint (Handles original loop logic)
-    CROW_ROUTE(app, "/chat").methods(crow::HTTPMethod::POST)([apiKey](const crow::request& req){
+    // Route 3: WebSocket Telemetry Endpoint
+    CROW_WEBSOCKET_ROUTE(app, "/telemetry")
+        .onopen([&](crow::websocket::connection& conn) {
+            std::cout << "\n[WS] Client connected: " << conn.get_remote_ip() << "\n";
+            std::lock_guard<std::mutex> lock(g_wsMutex);
+            g_wsConnections.insert(&conn);
+        })
+        .onclose([&](crow::websocket::connection& conn, const std::string& reason, uint16_t /*code*/) {
+            std::cout << "\n[WS] Client disconnected: " << conn.get_remote_ip() << "\n";
+            std::lock_guard<std::mutex> lock(g_wsMutex);
+            g_wsConnections.erase(&conn);
+        })
+        .onmessage([&](crow::websocket::connection& conn, const std::string& data, bool isbin) {
+            // Client can send commands; echo back for now
+            conn.send_text("{\"status\":\"connected\",\"engine\":\"Dom C++ Core\"}");
+        });
+
+    // Route 4: Chat API Endpoint (with Authorization + Async probes)
+    CROW_ROUTE(app, "/chat").methods(crow::HTTPMethod::POST)([apiKey, masterSecret](const crow::request& req){
+        // --- AUTHORIZATION CHECK ---
+        std::string authHeader = req.get_header_value("Authorization");
+        if (authHeader.empty() || authHeader != "Bearer " + masterSecret) {
+            crow::response errorRes(401);
+            errorRes.body = "{\"error\": \"Unauthorized access\"}";
+            errorRes.set_header("Content-Type", "application/json");
+            return errorRes;
+        }
+
         json body;
         try {
             body = json::parse(req.body);
@@ -363,14 +448,13 @@ int main() {
             return errorRes;
         }
 
-        // --- Core Execution Logic (Exact logic from your console loop) ---
+        // --- Core Execution Logic ---
         updateRAM("user", userInput);
 
         json messagesArray = json::array();
-        std::ifstream ramFile(RAM_FILE);
-        if (ramFile.is_open()) {
-            try { ramFile >> messagesArray; } catch(...) {}
-            ramFile.close();
+        std::string ramJson = captureDbBridge("ram:load root");
+        if (!ramJson.empty()) {
+            try { messagesArray = json::parse(ramJson); } catch(...) {}
         }
 
         std::string customRules = loadCustomRules();
@@ -386,15 +470,55 @@ int main() {
         }
 
         checkAndSaveToHDD(domReply);
+
+        // --- Check for long-running probes: dispatch async and respond immediately ---
+        bool isLongRun = false;
+        {
+            size_t probeStart = domReply.find("[PROBE:");
+            if (probeStart != std::string::npos) {
+                size_t probeEnd = domReply.find("]", probeStart);
+                if (probeEnd != std::string::npos) {
+                    std::string probeKey = domReply.substr(probeStart + 7, probeEnd - (probeStart + 7));
+                    probeKey = trim(probeKey);
+
+                    if (isLongRunningProbe(probeKey)) {
+                        std::ifstream cmdFile(COMMANDS_FILE);
+                        if (cmdFile.is_open()) {
+                            try {
+                                json cmdData;
+                                cmdFile >> cmdData;
+                                if (cmdData.contains(probeKey)) {
+                                    std::string actualCmd = cmdData[probeKey];
+                                    dispatchBackgroundTask(actualCmd, probeKey);
+                                    isLongRun = true;
+                                }
+                            } catch (...) {}
+                            cmdFile.close();
+                        }
+                    }
+                }
+            }
+        }
+
+        if (isLongRun) {
+            updateRAM("assistant", "Task initiated, Master. Running in background...");
+            json responseBody;
+            responseBody["reply"] = "Task initiated, Master. Running in background...";
+            crow::response res;
+            res.code = 200;
+            res.set_header("Content-Type", "application/json");
+            res.body = responseBody.dump();
+            return res;
+        }
+
         checkAndExecuteCommand(domReply);
 
         std::string telemetryStatus = processTelemetryProbes(domReply);
         if (!telemetryStatus.empty()) {
-            std::ifstream transientRam(RAM_FILE);
             json transientArray = json::array();
-            if (transientRam.is_open()) {
-                try { transientRam >> transientArray; } catch(...) {}
-                transientRam.close();
+            std::string transientJson = captureDbBridge("ram:load root");
+            if (!transientJson.empty()) {
+                try { transientArray = json::parse(transientJson); } catch(...) {}
             }
             transientArray.insert(transientArray.begin(), systemPrompt);
             
@@ -412,9 +536,7 @@ int main() {
 
         std::string output = cleanOutputText(domReply);
         speakText(output);
-        // --- End of Core Execution Logic ---
 
-        // Prepare proper clean JSON response back to caller
         json responseBody;
         responseBody["reply"] = output;
 

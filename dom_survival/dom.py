@@ -20,6 +20,7 @@ from core.memory import update_ram, load_ram, load_hdd, hdd_set
 from core.rules import load_rules
 from core.tags import TagRegistry, clean_output
 from core.engine import infer, get_api_key
+from dom_memory import save_memory, search_memory
 
 
 # ANSI Colors
@@ -33,11 +34,35 @@ BOLD = "\033[1m"
 
 def process_message(user_input: str, tags: TagRegistry) -> str:
     """Process a user message through the full pipeline."""
+    # --- Long-term memory: "Remember that" command ---
+    lower_input = user_input.strip()
+    remember_prefixes = ["remember that ", "remember "]
+    for prefix in remember_prefixes:
+        if lower_input.lower().startswith(prefix):
+            fact = user_input.strip()[len(prefix):].strip()
+            if fact:
+                save_memory("user_fact", fact)
+                update_ram("user", user_input)
+                reply = f"Understood, Master. I will remember: {fact}"
+                update_ram("assistant", reply)
+                return reply
+
+    # --- Search long-term memories for relevant context ---
+    memory_context = None
+    try:
+        memories = search_memory(user_input, limit=3)
+        if memories:
+            memory_context = "\n".join(
+                f"- [{m['category']}] {m['content']}" for m in memories
+            )
+    except Exception:
+        pass  # Memory search is best-effort; never block inference
+
     # Save to memory
     update_ram("user", user_input)
 
-    # Get AI response
-    dom_reply = infer(user_input)
+    # Get AI response (with memory context injected into system prompt)
+    dom_reply = infer(user_input, memory_context)
     if dom_reply == "ERROR_SIGNAL":
         return "Connection failed. Running in offline mode."
 
@@ -118,6 +143,8 @@ def interactive_mode():
                 print("  exit       — Close Dom")
                 print("  help       — Show this help")
                 print("  memory     — Show conversation memory")
+                print("  memories   — Search long-term memories")
+                print("  remember <fact> — Save a fact to long-term memory")
                 print("  status     — Show system status")
                 print("  kb         — Search knowledge base")
                 print("  kb rebuild — Rebuild knowledge base")
@@ -129,6 +156,27 @@ def interactive_mode():
                     role = msg["role"]
                     color = GREEN if role == "assistant" else BOLD
                     print(f"{color}{role}:{RESET} {msg['content'][:100]}...")
+                continue
+
+            elif user_input.lower().startswith("remember "):
+                fact = user_input[len("remember "):].strip()
+                if fact:
+                    save_memory("user_fact", fact)
+                    print(f"{GREEN}Remembered: {fact}{RESET}")
+                else:
+                    print("Usage: remember <fact>")
+                continue
+
+            elif user_input.lower() == "memories":
+                query = input(f"{BOLD}Search query: {RESET} ").strip()
+                if query:
+                    results = search_memory(query, limit=5)
+                    if results:
+                        for m in results:
+                            print(f"\n{CYAN}[{m['category']}]{RESET} {m['content']}")
+                            print(f"  {YELLOW}{m['timestamp']}{RESET}")
+                    else:
+                        print("No matching memories found.")
                 continue
 
             elif user_input.lower() == "status":

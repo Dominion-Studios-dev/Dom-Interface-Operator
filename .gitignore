@@ -1,45 +1,27 @@
-# Compiled binaries
-/main
-/dom
-/dom_interface
-*.o
-dom_cloud/main
-
-# Old project files (preserved but not tracked)
-dom_sandbox/
-.crow*
-
-# Generated files
-.voice.mp3
-voice.mp3
-
-# Environment (secrets)
-.env
-dom_cloud/.env
-.env.*
-!.env.example
-
-# Runtime memory (user-specific)
-dom_cloud/memory/
-dom_survival/memory/
-
-# Knowledge base (generated)
-dom_survival/knowledge/survival.db
-
-# Logs
-*.log
-logs/
-
-# Python
 __pycache__/
 *.pyc
 *.pyo
 
-# Build artifacts
-build/
-dist/
-*.class
+venv/
+.env
 
-# OS
+.config/
+dom_sandbox/
+dom_cloud/data/
+dom_cloud/logs/
+
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
+
+*.mp3
+dom_server
+dom_interface
+readme.txt
+.env
+*.db
+dom_sandbox/core_memory/*.json
+dom_cloud/main
+**/memory/*.json

@@ -1,62 +1,41 @@
-"""Memory management — RAM (rolling conversation) and HDD (permanent key-value)."""
+"""Memory management — delegates to shared/libsql database.
 
-import json
+Replaces JSON file I/O with unified libsql database (Turso-synced).
+Preserves all existing function signatures for backward compatibility.
+Uses 'survival' session for conversation isolation.
+"""
+
 import os
+import sys
 
-MAX_RAM = 12
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from shared import db
 
-def _base_dir():
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SESSION = "survival"
 
-def ram_path():
-    return os.path.join(_base_dir(), "memory", "ram.json")
+def _init():
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    db_path = os.path.join(base, "memory", "dom.db")
+    db.set_db_path(db_path)
 
-def hdd_path():
-    return os.path.join(_base_dir(), "memory", "hdd.json")
-
-def _ensure_dir(path):
-    d = os.path.dirname(path)
-    if not os.path.exists(d):
-        os.makedirs(d, exist_ok=True)
-
-def load_json(path, fallback=None):
-    if fallback is None:
-        fallback = []
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return fallback
-
-def save_json(path, data):
-    _ensure_dir(path)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=4)
+_init()
 
 def load_ram():
-    return load_json(ram_path(), [])
-
-def save_ram(data):
-    save_json(ram_path(), data)
+    return db.ram_load(SESSION)
 
 def update_ram(role, content):
-    ram = load_ram()
-    ram.append({"role": role, "content": content})
-    while len(ram) > MAX_RAM:
-        ram.pop(0)
-    save_ram(ram)
+    db.ram_push(role, content, SESSION)
 
 def load_hdd():
-    return load_json(hdd_path(), {})
+    return db.hdd_get_all()
 
 def save_hdd(data):
-    save_json(hdd_path(), data)
+    if isinstance(data, dict):
+        for k, v in data.items():
+            db.hdd_set(k, str(v) if not isinstance(v, str) else v)
 
 def hdd_get(key):
-    hdd = load_hdd()
-    return hdd.get(key)
+    return db.hdd_get(key)
 
 def hdd_set(key, value):
-    hdd = load_hdd()
-    hdd[key] = value
-    save_hdd(hdd)
+    db.hdd_set(key, value)

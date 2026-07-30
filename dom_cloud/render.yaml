@@ -8,3 +8,5 @@ services:
         value: 7860
       - key: GROQ_API_KEY
         sync: false
+      - key: DOM_MASTER_SECRET
+        sync: false

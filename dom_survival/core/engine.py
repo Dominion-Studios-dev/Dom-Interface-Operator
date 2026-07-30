@@ -29,12 +29,20 @@ def _ollama_available() -> bool:
         return False
 
 
-def fire_groq(message: str, api_key: str) -> Optional[str]:
-    """Call Groq API for inference."""
+def fire_groq(message: str, api_key: str, memory_context: str = None) -> Optional[str]:
+    """Call Groq API for inference.
+
+    If memory_context is provided, it is prepended to the system prompt
+    so the LLM has long-term historical awareness.
+    """
     if not api_key:
         return None
 
-    messages = [{"role": "system", "content": load_rules()}]
+    system_content = load_rules()
+    if memory_context:
+        system_content += f"\n\n[RELEVANT MEMORIES]:\n{memory_context}"
+
+    messages = [{"role": "system", "content": system_content}]
     for msg in load_ram():
         messages.append(msg)
     messages.append({"role": "user", "content": message})
@@ -61,9 +69,16 @@ def fire_groq(message: str, api_key: str) -> Optional[str]:
         return None
 
 
-def fire_ollama(message: str) -> Optional[str]:
-    """Call local Ollama for inference."""
-    messages = [{"role": "system", "content": load_rules()}]
+def fire_ollama(message: str, memory_context: str = None) -> Optional[str]:
+    """Call local Ollama for inference.
+
+    If memory_context is provided, it is prepended to the system prompt.
+    """
+    system_content = load_rules()
+    if memory_context:
+        system_content += f"\n\n[RELEVANT MEMORIES]:\n{memory_context}"
+
+    messages = [{"role": "system", "content": system_content}]
     for msg in load_ram():
         messages.append(msg)
     messages.append({"role": "user", "content": message})
@@ -128,19 +143,23 @@ def get_api_key() -> str:
     return os.environ.get("GROQ_API_KEY", "").strip()
 
 
-def infer(message: str) -> str:
-    """Main inference function — tries cloud, then local, then rules."""
+def infer(message: str, memory_context: str = None) -> str:
+    """Main inference function — tries cloud, then local, then rules.
+
+    If memory_context is provided, it is injected into the LLM system prompt
+    for long-term memory awareness.
+    """
     api_key = get_api_key()
 
     # Tier 1: Cloud (Groq)
     if api_key and _groq_available():
-        result = fire_groq(message, api_key)
+        result = fire_groq(message, api_key, memory_context)
         if result:
             return result
 
     # Tier 2: Local LLM (Ollama)
     if _ollama_available():
-        result = fire_ollama(message)
+        result = fire_ollama(message, memory_context)
         if result:
             return result
 

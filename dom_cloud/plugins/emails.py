@@ -10,15 +10,17 @@ import time
 import sys
 
 # Dynamically find exact absolute paths based on where this file is stored
-PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))  # dom_cloud/plugins
+PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 SANDBOX_DIR = os.path.join(os.path.dirname(PLUGIN_DIR), "..", "dom_sandbox")
 PROJECT_ROOT = os.path.dirname(SANDBOX_DIR)
 
-HDD_PATH = os.path.join(SANDBOX_DIR, "core_memory", "dom_hdd.json")
 TXT_OUTPUT_PATH = os.path.join(SANDBOX_DIR, "important_emails.txt")
-MEMORY_CACHE_PATH = os.path.join(SANDBOX_DIR, "core_memory", "email_filters_memory.json")
 
-# Read credentials exclusively from environment variables
+# Unified database — replaces JSON file I/O
+sys.path.insert(0, os.path.join(os.path.dirname(PROJECT_ROOT), "shared"))
+sys.path.insert(0, PROJECT_ROOT)
+from shared import db
+
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 IMAP_SERVER = os.getenv("EMAIL_IMAP_SERVER")
@@ -28,20 +30,7 @@ def clean_text(text):
     return "".join(c for c in text if 32 <= ord(c) <= 126 or c in "\n\t")
 
 def load_filter_memory():
-    if os.path.exists(MEMORY_CACHE_PATH):
-        try:
-            with open(MEMORY_CACHE_PATH, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"scam_senders": [], "promo_senders": []}
-
-def save_filter_memory(memory_data):
-    try:
-        with open(MEMORY_CACHE_PATH, "w") as f:
-            json.dump(memory_data, f, indent=4)
-    except Exception:
-        pass
+    return db.email_filter_load_all()
 
 def ask_ai_to_classify(sender, subject, snippet):
     if not GROQ_API_KEY:
@@ -89,7 +78,6 @@ def fetch_live_emails():
         return
 
     filter_memory = load_filter_memory()
-    memory_updated = False
 
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
@@ -109,7 +97,7 @@ def fetch_live_emails():
         total_to_process = len(target_ids)
         now = datetime.now(timezone.utc)
         
-        print(f"\n[System]: Initiating deep cleanup for {total_to_process} items...", file=sys.stderr, flush=True)
+        print(f"\n[System]: Initiating deep cleanup for {total_to_process} items...", flush=True)
 
         for idx, m_id in enumerate(target_ids, 1):
             status, msg_data = mail.fetch(m_id, '(RFC822)')
@@ -151,7 +139,7 @@ def fetch_live_emails():
 
                     # --- BYPASS INTERFACE PIPE BY WRITING DIRECTLY TO STDERR ---
                     short_subject = subject[:25] + "..." if len(subject) > 25 else subject
-                    print(f"[Counter]: {idx}/{total_to_process} processing | Target: {short_subject}", file=sys.stderr, flush=True)
+                    print(f"[Counter]: {idx}/{total_to_process} processing | Target: {short_subject}", flush=True)
 
                     # Twitch Time-out Check
                     if "twitch.tv" in from_lower or "twitch" in from_lower:
@@ -178,9 +166,8 @@ def fetch_live_emails():
                         token_saved_count += 1
                     else:
                         classification = ask_ai_to_classify(from_user, subject, body)
-                        if classification == "PROMOTION" and from_lower not in filter_memory["promo_senders"]:
-                            filter_memory["promo_senders"].append(from_lower)
-                            memory_updated = True
+                        if classification == "PROMOTION":
+                            db.email_filter_add("promo", from_lower)
                         time.sleep(0.01)
 
                     if classification in ["PROMOTION", "DELETED_VIA_CACHE"]:
@@ -199,9 +186,6 @@ def fetch_live_emails():
         mail.expunge()
         mail.logout()
 
-        if memory_updated:
-            save_filter_memory(filter_memory)
-
         with open(TXT_OUTPUT_PATH, "w") as txt_file:
             if important_briefing:
                 txt_file.write(f"--- MASTER ARDIS' HIGH-PRIORITY INBOX ({len(important_briefing)} MESSAGES) ---\n\n")
@@ -209,22 +193,13 @@ def fetch_live_emails():
             else:
                 txt_file.write("Your live inbox contains no unread important items right now, Master.")
 
-        hdd_data = {}
-        if os.path.exists(HDD_PATH):
-            with open(HDD_PATH, "r") as f:
-                try: hdd_data = json.load(f)
-                except: pass
+        db.hdd_set("spam_deleted_today", str(purged_count))
+        db.hdd_set("token_free_skips", str(token_saved_count))
+        db.hdd_set("unread_important_emails", f"Found {len(important_briefing)} valid messages.")
 
-        hdd_data["spam_deleted_today"] = str(purged_count)
-        hdd_data["token_free_skips"] = str(token_saved_count)
-        hdd_data["unread_important_emails"] = f"Found {len(important_briefing)} valid messages."
-
-        with open(HDD_PATH, "w") as f:
-            json.dump(hdd_data, f, indent=4)
-
-        print(f"\n--- 1000-RUN COMPLETED ---", file=sys.stderr)
-        print(f"[Action]: Permanently deleted {purged_count} garbage items.", file=sys.stderr)
-        print(f"[Optimization]: Intercepted {token_saved_count} items via filter memory.", file=sys.stderr, flush=True)
+        print(f"\n--- 1000-RUN COMPLETED ---")
+        print(f"[Action]: Permanently deleted {purged_count} garbage items.")
+        print(f"[Optimization]: Intercepted {token_saved_count} items via filter memory.", flush=True)
 
     except Exception as e:
         print(f"\nNetwork Drop: {str(e)}", file=sys.stderr, flush=True)

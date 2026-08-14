@@ -26,3 +26,8 @@ dom_sandbox/core_memory/*.json
 dom_cloud/main
 **/memory/*.json
 updates.txt
+.request.json
+.response.json
+main
+dom_hdd.json
+dom_ram.json

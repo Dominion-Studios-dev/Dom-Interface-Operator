@@ -13,7 +13,7 @@ A modular, terminal-native AI desktop assistant.
 ## Quickstart
 
 ```bash
-# Run the interactive terminal
+# Run the interactive terminal (auto-detects cloud / local / survival mode)
 ./dom
 
 # Run in local-only mode (no cloud server)
@@ -21,7 +21,38 @@ A modular, terminal-native AI desktop assistant.
 
 # Single message mode
 ./dom clean my emails
+
+# Build the C++ API server (requires libasio-dev, libcurl, nlohmann-json)
+g++ -O3 -std=c++17 main.cpp -lpthread -lcurl -o main
 ```
+
+## Running the Server
+
+```bash
+export GROQ_API_KEY=your_key
+export DOM_MASTER_SECRET=your_secret
+export DOM_BIND=127.0.0.1   # optional; use 0.0.0.0 for cloud deployments
+export PORT=7860            # optional; default 7860
+./main
+```
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/` | GET | Plain-text health check |
+| `/ping` | GET | JSON `{"status": "alive"}` health check |
+| `/status` | GET | Uptime, request counter, WebSocket clients, bind/port, model |
+| `/telemetry` | WS | Live CPU / memory broadcast every 2s |
+| `/chat` | POST | Chat with Dom; requires `Authorization: Bearer $DOM_MASTER_SECRET` |
+
+## Security Model
+
+- The server binds to loopback only by default; cloud deployments opt in with `DOM_BIND=0.0.0.0`.
+- `/chat` requires the `DOM_MASTER_SECRET` bearer token.
+- User/LLM data never passes through a shell: all process execution uses `fork`/`execvp` with explicit argv arrays.
+- Shell commands (`/bin/sh -c`) run only trusted static whitelist entries from `shared/dom_commands.json`.
+- GROQ calls use in-process libcurl — no temp files, no shared state between concurrent request threads.
 
 ## Adding a Module
 
@@ -45,4 +76,3 @@ Copyright (c) 2026 Dominion Studios. All Rights Reserved.
 This repository and its source code are made available solely for academic and educational review.
 
 No permission is granted to copy, modify, distribute, sublicense, run, or reuse any part of this software for any purpose without explicit written consent from the copyright holder.
-

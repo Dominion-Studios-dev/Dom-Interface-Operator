@@ -20,6 +20,8 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
 
 using json = nlohmann::json;
 
@@ -31,6 +33,28 @@ const std::string RULES_FILE = "shared/dom_rules.txt";
 
 // Python database bridge — replaces all JSON file I/O
 const std::string BRIDGE_SCRIPT = "dom_db_bridge.py";
+
+// ============================================================================
+// TIMESTAMPED LOGGING
+// ============================================================================
+std::string currentTimestamp() {
+    std::time_t now = std::time(nullptr);
+    std::tm tmv{};
+    localtime_r(&now, &tmv);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmv);
+    return buf;
+}
+
+static void logInfo(const std::string& msg)  { std::cout << "[" << currentTimestamp() << "] [INFO]  " << msg << std::endl; }
+static void logWarn(const std::string& msg)  { std::cout << "[" << currentTimestamp() << "] [WARN]  " << msg << std::endl; }
+static void logErr(const std::string& msg)   { std::cerr << "[" << currentTimestamp() << "] [ERROR] " << msg << std::endl; }
+
+// ============================================================================
+// RUNTIME METRICS (uptime / request count for /status)
+// ============================================================================
+static const std::chrono::steady_clock::time_point g_startTime = std::chrono::steady_clock::now();
+static std::atomic<unsigned long> g_requestCount{0};
 
 // ============================================================================
 // TELEMETRY SANITIZER: STRIPS LINUX ANSI COLOR CODES & CONTROL JUNK
@@ -225,6 +249,23 @@ void speakText(const std::string& text) {
     }).detach();
 }
 
+// Remove .voice.*.mp3 leftovers (crashed runs / interrupted TTS) from the
+// working directory. Called once at startup.
+void sweepStaleVoiceFiles() {
+    namespace fs = std::filesystem;
+    try {
+        for (const auto& entry : fs::directory_iterator(".")) {
+            const std::string name = entry.path().filename().string();
+            if (name.rfind(".voice.", 0) == 0 &&
+                name.size() > 7 &&
+                name.compare(name.size() - 4, 4, ".mp3") == 0) {
+                std::remove(name.c_str());
+                logInfo("Removed stale voice file: " + name);
+            }
+        }
+    } catch (...) {}
+}
+
 // ============================================================================
 // UTILITY & STRING PROCESSING
 // ============================================================================
@@ -332,7 +373,7 @@ void checkAndSaveToHDD(const std::string& reply) {
     while (std::regex_search(searchStart, reply.cend(), match, saveRegex)) {
         std::string key = match[1].str();
         std::string value = match[2].str();
-        std::cout << "Saving memory: " << key << " -> " << value << std::endl;
+        logInfo("Saving memory: " + key + " -> " + value);
 
         execDbBridge({"hdd:set", key, value});
 
@@ -358,7 +399,7 @@ void checkAndExecuteCommand(const std::string& aiResponse) {
                     cmdFile >> cmdData;
                     if (cmdData.contains(cmdKey)) {
                         std::string actualSystemCommand = cmdData[cmdKey];
-                        std::cout << "\n[Executing System Authorization: " << actualSystemCommand << "]\n";
+                        logInfo("[Executing System Authorization] " + actualSystemCommand);
                         runShellCommandSync(actualSystemCommand); // trusted static whitelist value
                     }
                 } catch(...) {}
@@ -383,7 +424,7 @@ std::string processTelemetryProbes(const std::string& aiResponse) {
                     cmdFile >> cmdData;
                     if (cmdData.contains(probeKey)) {
                         std::string targetCmd = cmdData[probeKey];
-                        std::cout << "\n[System Notice: Dom pulling system logs via: " << targetCmd << "]\n";
+                        logInfo("[System Notice] Dom pulling system logs via: " + targetCmd);
                         
                         std::string rawLogs = runCommandAndCaptureOutput(targetCmd);
                         rawLogs = stripAnsiAndControlCodes(rawLogs);
@@ -410,12 +451,12 @@ bool isLongRunningProbe(const std::string& probeKey) {
 
 void dispatchBackgroundTask(const std::string& taskCmd, const std::string& taskName) {
     std::thread([taskCmd, taskName]() {
-        std::cout << "\n[BACKGROUND] Starting task: " << taskName << "\n";
+        logInfo("[BACKGROUND] Starting task: " + taskName);
         std::string result = runCommandAndCaptureOutput(taskCmd);
         result = stripAnsiAndControlCodes(result);
         if (result.empty()) result = "Task completed with no output.";
         sendNtfyNotification(taskName + " finished.\n" + result);
-        std::cout << "\n[BACKGROUND] Task completed: " << taskName << "\n";
+        logInfo("[BACKGROUND] Task completed: " + taskName);
     }).detach();
 }
 
@@ -533,17 +574,19 @@ void startTelemetryBroadcaster() {
 int main() {
     std::string apiKey = getApiKey();
     if (apiKey.empty()) {
-        std::cerr << "[CRITICAL ERROR]: GROQ_API_KEY not found in environment variables!" << std::endl;
+        logErr("GROQ_API_KEY not found in environment variables!");
         return 1;
     }
 
     std::string masterSecret = getMasterSecret();
     if (masterSecret.empty()) {
-        std::cerr << "[CRITICAL ERROR]: DOM_MASTER_SECRET not found in environment variables!" << std::endl;
+        logErr("DOM_MASTER_SECRET not found in environment variables!");
         return 1;
     }
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
+
+    sweepStaleVoiceFiles();
 
     execDbBridge({"init"});
     execDbBridge({"ram:clear", "root"});
@@ -567,15 +610,48 @@ int main() {
         return res;
     });
 
-    // Route 3: WebSocket Telemetry Endpoint
+    // Route 3: Status Endpoint (uptime, counters, connectivity)
+    CROW_ROUTE(app, "/status")([](){
+        const long uptimeSeconds = static_cast<long>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - g_startTime).count());
+
+        size_t wsClients = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_wsMutex);
+            wsClients = g_wsConnections.size();
+        }
+
+        const char* bind_env = std::getenv("DOM_BIND");
+        const char* port_env = std::getenv("PORT");
+
+        json status;
+        status["status"] = "online";
+        status["engine"] = "Dom C++ Core";
+        status["uptime_seconds"] = uptimeSeconds;
+        status["requests_served"] = g_requestCount.load();
+        status["websocket_clients"] = wsClients;
+        status["bind_address"] = (bind_env && *bind_env) ? bind_env : "127.0.0.1";
+        status["port"] = port_env ? std::stoi(port_env) : 7860;
+        status["groq_model"] = "llama-3.1-8b-instant";
+        status["time"] = currentTimestamp();
+
+        crow::response res;
+        res.code = 200;
+        res.set_header("Content-Type", "application/json");
+        res.body = status.dump();
+        return res;
+    });
+
+    // Route 4: WebSocket Telemetry Endpoint
     CROW_WEBSOCKET_ROUTE(app, "/telemetry")
         .onopen([&](crow::websocket::connection& conn) {
-            std::cout << "\n[WS] Client connected: " << conn.get_remote_ip() << "\n";
+            logInfo("[WS] Client connected from " + conn.get_remote_ip());
             std::lock_guard<std::mutex> lock(g_wsMutex);
             g_wsConnections.insert(&conn);
         })
         .onclose([&](crow::websocket::connection& conn, const std::string& reason, uint16_t /*code*/) {
-            std::cout << "\n[WS] Client disconnected: " << conn.get_remote_ip() << "\n";
+            logInfo("[WS] Client disconnected from " + conn.get_remote_ip() + " (" + reason + ")");
             std::lock_guard<std::mutex> lock(g_wsMutex);
             g_wsConnections.erase(&conn);
         })
@@ -584,8 +660,13 @@ int main() {
             conn.send_text("{\"status\":\"connected\",\"engine\":\"Dom C++ Core\"}");
         });
 
-    // Route 4: Chat API Endpoint (with Authorization + Async probes)
+    // Route 5: Chat API Endpoint (with Authorization + Async probes)
     CROW_ROUTE(app, "/chat").methods(crow::HTTPMethod::POST)([apiKey, masterSecret](const crow::request& req){
+        // --- REQUEST BOOKKEEPING ---
+        g_requestCount.fetch_add(1);
+        logInfo("[CHAT] request from " + req.remote_ip_address +
+                " (" + std::to_string(req.body.size()) + " bytes)");
+
         // --- AUTHORIZATION CHECK ---
         std::string authHeader = req.get_header_value("Authorization");
         if (authHeader.empty() || authHeader != "Bearer " + masterSecret) {
@@ -728,10 +809,17 @@ int main() {
     const char* bind_env = std::getenv("DOM_BIND");
     std::string bindAddr = (bind_env && *bind_env) ? bind_env : "127.0.0.1";
 
-    std::cout << "=== Dom Interface Initialized ===" << std::endl;
-    std::cout << "API Web Server active on " << bindAddr << ":" << port << "...\n" << std::endl;
-    
+    logInfo("=== Dom Interface Initialized ===");
+    logInfo("API Web Server active on " + bindAddr + ":" + std::to_string(port) + "...");
+    logInfo("GROQ model: llama-3.1-8b-instant | Custom rules: " + RULES_FILE);
+
     app.bindaddr(bindAddr).port(port).multithreaded().run();
+
+    // Graceful shutdown: crow handles SIGINT/SIGTERM internally and returns
+    // here once the server has stopped accepting traffic.
+    logInfo("Shutting down — flushing state...");
+    sweepStaleVoiceFiles();
     curl_global_cleanup();
+    logInfo("Dom Interface stopped cleanly.");
     return 0;
 }

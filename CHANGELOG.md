@@ -1,5 +1,35 @@
 # Changelog
 
+## [3.0.0] — 2026-08-14
+
+### Security Hardening
+- Removed every `std::system()` / shell-string path from `main.cpp`.
+  All process execution now uses `fork`/`execvp` with explicit argv arrays
+  (`execAndWait`, `execDetached`, `execAndCapture`), so user or LLM-derived
+  data can never be interpolated through a shell.
+- `runShellCommandSync()` is the only shell path left and is restricted to
+  trusted static whitelist strings from `shared/dom_commands.json`.
+- GROQ requests moved from `curl` + shared temp files to in-process libcurl
+  with a per-request in-memory response buffer (no `.request.json` /
+  `.response.json` race conditions between concurrent `/chat` threads).
+- TTS output uses unique per-request temp files (`.voice.<pid>.<seq>.mp3`);
+  stale files are swept at startup and shutdown.
+- HTTP server now binds to `127.0.0.1` by default. Cloud deployments
+  opt in with `DOM_BIND=0.0.0.0` (added to `render.yaml`).
+- Dockerfile: added `libcurl4-openssl-dev` and `-lcurl`.
+
+### Operational QoL
+- Timestamped `[INFO]` / `[WARN]` / `[ERROR]` logging replaces raw console output.
+- New `GET /status` endpoint: uptime, request counter, connected WebSocket
+  clients, bind address/port, GROQ model.
+- `/chat` requests are logged with remote IP and payload size.
+- Graceful shutdown on SIGINT/SIGTERM: Crow stops accepting traffic, stale
+  voice files are cleaned, libcurl is de-initialized, clean exit message.
+
+### Housekeeping
+- Removed dead legacy artifacts from the repo: `.request.json`,
+  `.response.json`, `.voice.mp3`, `test.mp3`, `dom_interface`, `dom_server`.
+
 ## [2.0.0] — 2026-07-21
 
 ### Render.com Docker Deployment

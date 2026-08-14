@@ -34,7 +34,7 @@
     "probe_hardware": "inxi -Fz",
     "probe_memory": "free -h",
     "probe_emails": "python3 dom_sandbox/plugins_archive/process_emails.py",
-    "system_stats": "python3 dom_sandbox/plugins_archive/process_system.py",
+    "system_stats": "python3 dom_cloud/plugins/maintain.py",
     "clean_email": "python3 dom_sandbox/plugins_archive/process_emails.py",
     "maintain": "python3 dom_sandbox/plugins_archive/maintain_system.py"
 

@@ -12,8 +12,14 @@
 #include <thread>
 #include <chrono>
 #include <mutex>
+#include <atomic>
 #include <unordered_set>
 #include <nlohmann/json.hpp>
+#include <curl/curl.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <cstring>
 
 using json = nlohmann::json;
 
@@ -22,8 +28,6 @@ using json = nlohmann::json;
 // ============================================================================
 const std::string COMMANDS_FILE = "shared/dom_commands.json";
 const std::string RULES_FILE = "shared/dom_rules.txt";
-const std::string REQUEST_FILE = "dom_sandbox/core_memory/.request.json";
-const std::string RESPONSE_FILE = "dom_sandbox/core_memory/.response.json";
 
 // Python database bridge — replaces all JSON file I/O
 const std::string BRIDGE_SCRIPT = "dom_db_bridge.py";
@@ -57,22 +61,168 @@ std::string stripAnsiAndControlCodes(const std::string& input) {
 }
 
 // ============================================================================
-// AUDIO STREAMING PIPELINE
+// SAFE PROCESS EXECUTION (fork/execvp — no shell interpolation)
+//
+// Every function below spawns children with explicit argv arrays, so no
+// user/LLM-derived data is ever interpolated through a shell. All children
+// are reaped with waitpid() (or reparented to init via double-fork) so no
+// zombies can accumulate.
 // ============================================================================
+
+// Build a null-terminated argv array for execvp from program name + args.
+static std::vector<char*> buildArgv(const std::string& program, const std::vector<std::string>& args) {
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 2);
+    argv.push_back(const_cast<char*>(program.c_str()));
+    for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+    return argv;
+}
+
+// Execute <program> <args...> via execvp; wait for completion; return exit
+// code (or -1 if the child could not be spawned). stdout/stderr are silenced
+// when silenceOutput is true.
+int execAndWait(const std::string& program, const std::vector<std::string>& args, bool silenceOutput) {
+    std::vector<char*> argv = buildArgv(program, args);
+    pid_t pid = fork();
+    if (pid == 0) {
+        if (silenceOutput) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) {
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                close(devnull);
+            }
+        }
+        execvp(program.c_str(), argv.data());
+        _exit(127);
+    }
+    if (pid < 0) return -1;
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+// Spawn a completely detached child (double-fork + setsid, reparented to
+// init): fire-and-forget with no zombies and no blocking on the caller.
+void execDetached(const std::string& program, const std::vector<std::string>& args) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        pid_t grandchild = fork();
+        if (grandchild != 0) _exit(0); // intermediate child exits; init reaps grandchild
+
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+        std::vector<char*> argv = buildArgv(program, args);
+        execvp(program.c_str(), argv.data());
+        _exit(127);
+    }
+    if (pid > 0) {
+        int status = 0;
+        waitpid(pid, &status, 0); // reap the intermediate child only
+    }
+}
+
+// Execute <program> <args...> and capture its stdout (stderr silenced).
+// Blocks until the child finishes; the child is always reaped.
+std::string execAndCapture(const std::string& program, const std::vector<std::string>& args) {
+    int fds[2];
+    if (pipe(fds) != 0) return "";
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(fds[0]);
+        dup2(fds[1], STDOUT_FILENO);
+        close(fds[1]);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+        std::vector<char*> argv = buildArgv(program, args);
+        execvp(program.c_str(), argv.data());
+        _exit(127);
+    }
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        return "";
+    }
+    close(fds[1]);
+    std::string result;
+    char buffer[128];
+    ssize_t n;
+    while ((n = read(fds[0], buffer, sizeof(buffer))) > 0) {
+        result.append(buffer, static_cast<size_t>(n));
+    }
+    close(fds[0]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return result;
+}
+
+// Run a *trusted static* command string through /bin/sh -c and wait.
+// INTENDED USE ONLY for whitelisted constant strings (dom_commands.json)
+// that may contain shell syntax (pipes, redirection, backgrounding).
+// User or LLM data must NEVER reach `cmd`.
+void runShellCommandSync(const std::string& cmd) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl("/bin/sh", "sh", "-c", cmd.c_str(), (char*)nullptr);
+        _exit(127);
+    }
+    if (pid > 0) {
+        int status = 0;
+        waitpid(pid, &status, 0);
+    }
+}
+
+// ============================================================================
+// AUDIO STREAMING PIPELINE (edge-tts → mpv, per-request temp file)
+// ============================================================================
+std::string trim(const std::string& str);
+
 void speakText(const std::string& text) {
     if (text.empty()) return;
     
     std::string safeVoiceText = "";
     for (char c : text) {
         if (c == '"' || c == '\'' || c == '`' || c == ';' || c == '&' || c == '|' || c == '$' || c == '(' || c == ')') {
-            safeVoiceText += ' ';
+            continue;
         } else {
             safeVoiceText += c;
         }
     }
-    
-    std::string ttsCommand = "edge-tts --voice en-US-BrianNeural --rate=+15% --text \"" + safeVoiceText + "\" --write-media \".voice.mp3\" && mpv --volume=140 \".voice.mp3\" > /dev/null 2>&1 &";
-    std::system(ttsCommand.c_str());
+    safeVoiceText = trim(safeVoiceText);
+    if (safeVoiceText.empty()) return;
+
+    // Unique per-request file: no shared .voice.mp3 write races between
+    // concurrent /chat threads.
+    static std::atomic<unsigned long> sVoiceSeq{0};
+    std::string outFile = ".voice." + std::to_string(static_cast<long>(::getpid())) + "." +
+                          std::to_string(sVoiceSeq.fetch_add(1)) + ".mp3";
+
+    // Keep the HTTP handler non-blocking: TTS runs fully in a detached thread.
+    std::thread([safeVoiceText, outFile]() {
+        int ttsResult = execAndWait("edge-tts", {
+            "--voice", "en-US-BrianNeural",
+            "--rate=+15%",
+            "--text", safeVoiceText,
+            "--write-media", outFile
+        }, true);
+        if (ttsResult != 0) {
+            std::remove(outFile.c_str());
+            return;
+        }
+        execDetached("mpv", {"--volume=140", outFile});
+        // Give mpv a generous window to open the file, then clean up.
+        std::this_thread::sleep_for(std::chrono::seconds(120));
+        std::remove(outFile.c_str());
+    }).detach();
 }
 
 // ============================================================================
@@ -114,6 +264,9 @@ std::string loadCustomRules() {
     return buffer.str();
 }
 
+// Capture the output of a shell pipeline. Used ONLY with trusted static
+// command strings (string constants / whitelist entries) — never user data.
+// pclose() internally waits for the child, so no zombies can accumulate.
 std::string runCommandAndCaptureOutput(const std::string& cmd) {
     char buffer[128];
     std::string result = "";
@@ -128,29 +281,26 @@ std::string runCommandAndCaptureOutput(const std::string& cmd) {
 }
 
 // ============================================================================
-// PYTHON DATABASE BRIDGE (replaces JSON file I/O)
+// PYTHON DATABASE BRIDGE (argv-based — injection-safe)
 // ============================================================================
-std::string shellEscape(const std::string& s) {
-    std::string out;
-    for (char c : s) {
-        if (c == '"' || c == '\\') { out += '\\'; out += c; }
-        else { out += c; }
-    }
-    return out;
+void execDbBridge(const std::vector<std::string>& args) {
+    std::vector<std::string> full;
+    full.reserve(args.size() + 1);
+    full.push_back(BRIDGE_SCRIPT);
+    full.insert(full.end(), args.begin(), args.end());
+    execAndWait("python3", full, true);
 }
 
-void execDbBridge(const std::string& args) {
-    std::string cmd = "python3 \"" + BRIDGE_SCRIPT + "\" " + args;
-    std::system(cmd.c_str());
-}
-
-std::string captureDbBridge(const std::string& args) {
-    std::string cmd = "python3 \"" + BRIDGE_SCRIPT + "\" " + args + " 2>/dev/null";
-    return runCommandAndCaptureOutput(cmd);
+std::string captureDbBridge(const std::vector<std::string>& args) {
+    std::vector<std::string> full;
+    full.reserve(args.size() + 1);
+    full.push_back(BRIDGE_SCRIPT);
+    full.insert(full.end(), args.begin(), args.end());
+    return execAndCapture("python3", full);
 }
 
 // ============================================================================
-// NTFY NOTIFICATION DISPATCHER
+// NTFY NOTIFICATION DISPATCHER (detached curl, argv-based)
 // ============================================================================
 void sendNtfyNotification(const std::string& message) {
     std::string safeText = "";
@@ -158,19 +308,21 @@ void sendNtfyNotification(const std::string& message) {
         if (c == '"') safeText += " ";
         else safeText += c;
     }
-    std::string cmd = "curl -s -X POST \"https://ntfy.sh/dom-interface\" "
-                      "-H \"Title: Dom Interface\" "
-                      "-H \"Tags: robot_face\" "
-                      "-d \"" + safeText + "\" > /dev/null 2>&1";
-    std::system(cmd.c_str());
+    if (safeText.empty()) return;
+    execDetached("curl", {
+        "-s", "-X", "POST",
+        "https://ntfy.sh/dom-interface",
+        "-H", "Title: Dom Interface",
+        "-H", "Tags: robot_face",
+        "-d", safeText
+    });
 }
 
 // ============================================================================
 // STATE & MEMORY MANAGERS (RAM / HDD)
 // ============================================================================
 void updateRAM(const std::string& role, const std::string& content) {
-    std::string args = "ram:push \"" + shellEscape(role) + "\" \"" + shellEscape(content) + "\" root";
-    execDbBridge(args);
+    execDbBridge({"ram:push", role, content, "root"});
 }
 
 void checkAndSaveToHDD(const std::string& reply) {
@@ -182,8 +334,7 @@ void checkAndSaveToHDD(const std::string& reply) {
         std::string value = match[2].str();
         std::cout << "Saving memory: " << key << " -> " << value << std::endl;
 
-        std::string args = "hdd:set \"" + shellEscape(key) + "\" \"" + shellEscape(value) + "\"";
-        execDbBridge(args);
+        execDbBridge({"hdd:set", key, value});
 
         searchStart = match.suffix().first;
     }
@@ -208,7 +359,7 @@ void checkAndExecuteCommand(const std::string& aiResponse) {
                     if (cmdData.contains(cmdKey)) {
                         std::string actualSystemCommand = cmdData[cmdKey];
                         std::cout << "\n[Executing System Authorization: " << actualSystemCommand << "]\n";
-                        std::system(actualSystemCommand.c_str());
+                        runShellCommandSync(actualSystemCommand); // trusted static whitelist value
                     }
                 } catch(...) {}
                 cmdFile.close();
@@ -237,8 +388,7 @@ std::string processTelemetryProbes(const std::string& aiResponse) {
                         std::string rawLogs = runCommandAndCaptureOutput(targetCmd);
                         rawLogs = stripAnsiAndControlCodes(rawLogs);
                         
-                        std::string args = "hdd:set \"last_system_probe\" \"" + shellEscape(rawLogs) + "\"";
-                        execDbBridge(args);
+                        execDbBridge({"hdd:set", "last_system_probe", rawLogs});
                         
                         return rawLogs;
                     }
@@ -270,38 +420,58 @@ void dispatchBackgroundTask(const std::string& taskCmd, const std::string& taskN
 }
 
 // ============================================================================
-// NETWORK LAYER (GROQ INTEGRATION)
+// NETWORK LAYER (GROQ INTEGRATION via in-process libcurl)
+//
+// The request body is streamed in memory with CURLOPT_WRITEFUNCTION into a
+// per-call std::string. No shared temp files on disk, so concurrent /chat
+// threads can never corrupt each other's request/response.
 // ============================================================================
+static size_t groqWriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+    const size_t total = size * nmemb;
+    static_cast<std::string*>(userp)->append(static_cast<const char*>(contents), total);
+    return total;
+}
+
 std::string fireGroqRequest(const json& messagesPayload, const std::string& apiKey) {
     json requestBody;
     requestBody["model"] = "llama-3.1-8b-instant";
     requestBody["messages"] = messagesPayload;
+    const std::string payload = requestBody.dump();
+    const std::string authHeader = "Authorization: Bearer " + apiKey;
 
-    std::ofstream reqFile(REQUEST_FILE);
-    if (!reqFile.is_open()) return "ERROR_SIGNAL";
-    reqFile << requestBody.dump();
-    reqFile.close();
+    CURL* curl = curl_easy_init();
+    if (!curl) return "ERROR_SIGNAL";
 
-    std::string command = "curl -X POST \"https://api.groq.com/openai/v1/chat/completions\" "
-                          "-H \"Authorization: Bearer " + apiKey + "\" "
-                          "-H \"Content-Type: application/json\" "
-                          "-d @\"" + REQUEST_FILE + "\" > \"" + RESPONSE_FILE + "\" 2>/dev/null";
-    
-    std::system(command.c_str());
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, authHeader.c_str());
 
-    std::ifstream responseFile(RESPONSE_FILE);
-    if (responseFile.is_open()) {
-        try {
-            json resJson;
-            responseFile >> resJson;
-            responseFile.close();
-            if (resJson.contains("choices") && !resJson["choices"].empty()) {
-                return resJson["choices"][0]["message"]["content"];
-            }
-        } catch (...) {
-            responseFile.close();
-        }
+    std::string responseBuffer; // per-request buffer; separate stack frame per thread
+    curl_easy_setopt(curl, CURLOPT_URL, "https://api.groq.com/openai/v1/chat/completions");
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(payload.size()));
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, groqWriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBuffer);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
+    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "Dom-Interface/2.1");
+
+    const CURLcode result = curl_easy_perform(curl);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    if (result != CURLE_OK || responseBuffer.empty()) {
+        return "ERROR_SIGNAL";
     }
+
+    try {
+        json resJson = json::parse(responseBuffer);
+        if (resJson.contains("choices") && !resJson["choices"].empty()) {
+            return resJson["choices"][0]["message"]["content"];
+        }
+    } catch (...) {}
     return "ERROR_SIGNAL";
 }
 
@@ -373,8 +543,10 @@ int main() {
         return 1;
     }
 
-    execDbBridge("init");
-    execDbBridge("ram:clear root");
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+
+    execDbBridge({"init"});
+    execDbBridge({"ram:clear", "root"});
 
     // Start WebSocket telemetry broadcaster
     startTelemetryBroadcaster();
@@ -452,7 +624,7 @@ int main() {
         updateRAM("user", userInput);
 
         json messagesArray = json::array();
-        std::string ramJson = captureDbBridge("ram:load root");
+        std::string ramJson = captureDbBridge({"ram:load", "root"});
         if (!ramJson.empty()) {
             try { messagesArray = json::parse(ramJson); } catch(...) {}
         }
@@ -516,7 +688,7 @@ int main() {
         std::string telemetryStatus = processTelemetryProbes(domReply);
         if (!telemetryStatus.empty()) {
             json transientArray = json::array();
-            std::string transientJson = captureDbBridge("ram:load root");
+            std::string transientJson = captureDbBridge({"ram:load", "root"});
             if (!transientJson.empty()) {
                 try { transientArray = json::parse(transientJson); } catch(...) {}
             }
@@ -551,9 +723,15 @@ int main() {
     const char* port_env = std::getenv("PORT");
     int port = port_env ? std::stoi(port_env) : 7860;
 
+    // Bind address hardening: default to loopback only. Cloud deployments
+    // override with DOM_BIND=0.0.0.0 in their environment.
+    const char* bind_env = std::getenv("DOM_BIND");
+    std::string bindAddr = (bind_env && *bind_env) ? bind_env : "127.0.0.1";
+
     std::cout << "=== Dom Interface Initialized ===" << std::endl;
-    std::cout << "API Web Server active on 0.0.0.0:" << port << "...\n" << std::endl;
+    std::cout << "API Web Server active on " << bindAddr << ":" << port << "...\n" << std::endl;
     
-    app.bindaddr("0.0.0.0").port(port).multithreaded().run();
+    app.bindaddr(bindAddr).port(port).multithreaded().run();
+    curl_global_cleanup();
     return 0;
 }

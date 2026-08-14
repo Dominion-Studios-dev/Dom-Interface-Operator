@@ -6,6 +6,8 @@ services:
     envVars:
       - key: PORT
         value: 7860
+      - key: DOM_BIND
+        value: 0.0.0.0
       - key: GROQ_API_KEY
         sync: false
       - key: DOM_MASTER_SECRET

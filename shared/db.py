@@ -6,14 +6,71 @@ Uses libsql with optional Turso edge sync via sync_url + auth_token.
 All operations work fully offline (local libsql replica).
 When TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are set, writes sync to
 the cloud Turso primary in the background — zero-latency local reads.
+
+LIBSQL FALLBACK:
+If the native `libsql` package is not importable in the active interpreter
+(common in minimal containers, fresh machines, or very new Python versions
+without a pip wheel), this module transparently falls back to the standard
+library `sqlite3` with an API-compatible connection wrapper. Every feature
+works identically; the ONLY difference is that Turso cloud sync is disabled
+until `libsql` is installed (pip install libsql-client). A single warning
+is printed to stderr so it never pollutes the C++ bridge stdout.
 """
 
 import os
 import json
 import sys
-import libsql
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
+
+try:
+    import libsql
+    HAS_LIBSQL = True
+except ImportError:
+    HAS_LIBSQL = False
+
+    import sqlite3
+
+    class _CompatConn:
+        """Wraps stdlib sqlite3.Connection to match the libsql client API used here.
+
+        Exposes execute/commit/close plus a no-op sync() so callers (and the
+        C++ bridge) never need to know libsql is unavailable.
+        """
+
+        def __init__(self, path: str):
+            self._conn = sqlite3.connect(path)
+            self._conn.row_factory = sqlite3.Row
+
+        def execute(self, sql, params=()):
+            return self._conn.execute(sql, params)
+
+        def commit(self):
+            self._conn.commit()
+
+        def close(self):
+            self._conn.close()
+
+        def sync(self):
+            return None
+
+    def _connect(path: str, **kwargs):
+        return _CompatConn(path)
+
+    def _warn_libsql_missing():
+        global _SYNC_WARNED
+        if not _SYNC_WARNED:
+            _SYNC_WARNED = True
+            print(
+                "[db] libsql package not found — running on stdlib SQLite3. "
+                "Turso cloud sync disabled until 'libsql-client' is installed.",
+                file=sys.stderr,
+            )
+
+else:
+
+    def _connect(path: str, **kwargs):
+        return libsql.connect(path, **kwargs)
 
 # ── Local .env loader (fallback if env vars not already set) ──────────
 def _load_dotenv():
@@ -64,8 +121,11 @@ def get_conn():
     global _SYNC_WARNED
     db_path = _resolve_path()
     if TURSO_URL and TURSO_TOKEN:
+        if not HAS_LIBSQL:
+            _warn_libsql_missing()
+            return _connect(db_path)
         try:
-            conn = libsql.connect(db_path, sync_url=TURSO_URL, auth_token=TURSO_TOKEN)
+            conn = _connect(db_path, sync_url=TURSO_URL, auth_token=TURSO_TOKEN)
             conn.sync()
             return conn
         except Exception as e:
@@ -76,9 +136,11 @@ def get_conn():
                     print("[db] Turso credentials invalid or expired. Running local-only.", file=sys.stderr)
                 else:
                     print(f"[db] Turso sync unavailable: {msg}. Running local-only.", file=sys.stderr)
-    return libsql.connect(db_path)
+    return _connect(db_path)
 
 def _sync(conn):
+    if not HAS_LIBSQL:
+        return
     if TURSO_URL and TURSO_TOKEN:
         try:
             conn.sync()
@@ -126,6 +188,15 @@ def init_schema():
         content TEXT NOT NULL
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_cat ON memories(category)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS snippets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        tag TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_snippets_tag ON snippets(tag)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_snippets_name ON snippets(name)")
     conn.commit()
     _sync(conn)
     conn.close()
@@ -333,6 +404,93 @@ def memory_search(query: str, limit: int = 3) -> List[Dict[str, str]]:
     ]
     conn.close()
     return results
+
+# ── Code Vault (code snippets) ───────────────────────────────────────────────
+
+def snippet_save(name: str, content: str, tag: str = "") -> Optional[int]:
+    """Save a code snippet. Returns row id, or None if name already exists."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO snippets (name, tag, content) VALUES (?, ?, ?)",
+            (name.strip(), tag.strip(), content)
+        )
+        row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.commit()
+        _sync(conn)
+        conn.close()
+        return row_id
+    except Exception:
+        conn.close()
+        return None
+
+def snippet_get(name: str) -> Optional[Dict[str, Any]]:
+    """Fetch a snippet by exact name."""
+    conn = get_conn()
+    cursor = conn.execute(
+        "SELECT name, tag, content, created_at FROM snippets WHERE name = ?",
+        (name.strip(),)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"name": row[0], "tag": row[1], "content": row[2], "created_at": row[3]}
+
+def snippet_search(query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Keyword search across name, tag, and content (LIKE)."""
+    conn = get_conn()
+    like = f"%{query.strip()}%"
+    cursor = conn.execute(
+        "SELECT name, tag, content, created_at FROM snippets "
+        "WHERE name LIKE ? OR tag LIKE ? OR content LIKE ? "
+        "ORDER BY id DESC LIMIT ?",
+        (like, like, like, limit)
+    )
+    results = [
+        {"name": row[0], "tag": row[1], "content": row[2], "created_at": row[3]}
+        for row in cursor.fetchall()
+    ]
+    conn.close()
+    return results
+
+def snippet_list(limit: int = 50) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    cursor = conn.execute(
+        "SELECT name, tag, created_at FROM snippets ORDER BY id DESC LIMIT ?",
+        (limit,)
+    )
+    results = [
+        {"name": row[0], "tag": row[1], "created_at": row[2]}
+        for row in cursor.fetchall()
+    ]
+    conn.close()
+    return results
+
+def snippet_tags() -> List[str]:
+    conn = get_conn()
+    cursor = conn.execute(
+        "SELECT DISTINCT tag FROM snippets WHERE tag != '' ORDER BY tag"
+    )
+    results = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return results
+
+def snippet_delete(name: str) -> bool:
+    conn = get_conn()
+    cursor = conn.execute("DELETE FROM snippets WHERE name = ?", (name.strip(),))
+    conn.commit()
+    _sync(conn)
+    deleted = cursor.rowcount > 0
+    conn.close()
+    return deleted
+
+def snippet_count() -> int:
+    conn = get_conn()
+    cursor = conn.execute("SELECT COUNT(*) FROM snippets")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
 
 # ── Migration Helpers ────────────────────────────────────────────────────────
 

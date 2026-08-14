@@ -26,7 +26,13 @@ def save_system_data(data):
 def run_command(cmd, desc):
     print(f"[Maintenance]: {desc}...", file=sys.stderr, flush=True)
     try:
-        result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                stdin=subprocess.DEVNULL, text=True)
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            print(f"[Maintenance]: FAILED ({desc}): exit code {result.returncode}", file=sys.stderr, flush=True)
+            if stderr:
+                print(f"[Maintenance]: stderr: {stderr}", file=sys.stderr, flush=True)
         return result.stdout.strip()
     except Exception as e:
         return f"Error: {str(e)}"
@@ -55,16 +61,16 @@ def execute_maintenance():
     # 1. DAILY MINI CLEAN (Runs Every Single Call)
     # =========================================================================
     # Vacuum systemd log journals down to exactly 500 Megabytes
-    run_command("sudo journalctl --vacuum-size=500M", "Vacuuming Systemd Journal Logs to 500MB")
+    run_command("sudo -n journalctl --vacuum-size=500M", "Vacuuming Systemd Journal Logs to 500MB")
     
     # Clear orphaned dead Pacman database lock files
     if os.path.exists("/var/lib/pacman/db.lck"):
-        check_proc = subprocess.run("pgrep pacman", shell=True, stdout=subprocess.PIPE)
+        check_proc = subprocess.run("pgrep pacman", shell=True, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
         if check_proc.returncode != 0:
-            run_command("sudo rm /var/lib/pacman/db.lck", "Vaporizing orphaned Pacman database lockfile")
+            run_command("sudo -n rm /var/lib/pacman/db.lck", "Vaporizing orphaned Pacman database lockfile")
             
     # Purge crashed system application core-dumps taking up space
-    run_command("sudo rm -rf /var/lib/systemd/coredump/*", "Scrubbing system core dump log crash files")
+    run_command("sudo -n rm -rf /var/lib/systemd/coredump/*", "Scrubbing system core dump log crash files")
     
     # Audit background systemd unit failure triggers
     run_command("systemctl --failed --quiet", "Auditing system services for operational failures")
@@ -87,17 +93,21 @@ def execute_maintenance():
         print("\n[Schedule Notice]: Running Comprehensive Weekly System Optimization Sequence...", file=sys.stderr)
         
         # Strip out unreferenced orphan dependencies no longer needed by any app
-        check_orphans = subprocess.run("pacman -Qdtq", shell=True, stdout=subprocess.PIPE, text=True)
+        check_orphans = subprocess.run("pacman -Qdtq", shell=True, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True)
         if check_orphans.stdout.strip():
-            run_command("sudo pacman -Rns $(pacman -Qdtq) --noconfirm", "Eradicating orphaned system dependencies")
+            run_command("sudo -n pacman -Rns $(pacman -Qdtq) --noconfirm", "Eradicating orphaned system dependencies")
         else:
             print("[Maintenance]: No system orphans detected.", file=sys.stderr)
         
-        # Clean pacman local installation archive down to last 2 safe fallback states
-        run_command("sudo paccache -r", "Trimming archived Pacman installer installer packages")
+        # Clean pacman local installation archive (paccache preferred, pacman fallback)
+        check_paccache = subprocess.run("which paccache", shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        if check_paccache.returncode == 0:
+            run_command("sudo -n paccache -r", "Trimming archived Pacman installer packages (paccache)")
+        else:
+            run_command("sudo -n pacman -Sc --noconfirm", "Trimming archived Pacman installer packages (pacman fallback)")
         
         # Manjaro Optimization: Re-rank the top 5 fastest mirror servers nearby to speed up downloads
-        run_command("sudo pacman-mirrors -f 5", "Re-ranking and refreshing top 5 fastest local network update mirrors")
+        run_command("sudo -n pacman-mirrors --fasttrack 5", "Re-ranking and refreshing top 5 fastest local network update mirrors")
         
         hdd_data["last_weekly_maintenance"] = now.strftime("%Y-%m-%d")
     

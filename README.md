@@ -40,5 +40,9 @@ def execute(user_input: str) -> dict:
 ```
 
 ## License
+Copyright (c) 2026 Dominion Studios. All Rights Reserved.
 
-MIT
+This repository and its source code are made available solely for academic and educational review.
+
+No permission is granted to copy, modify, distribute, sublicense, run, or reuse any part of this software for any purpose without explicit written consent from the copyright holder.
+

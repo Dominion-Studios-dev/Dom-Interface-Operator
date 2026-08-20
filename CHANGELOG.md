@@ -1,5 +1,35 @@
 # Changelog
 
+## [3.1.0] — 2026-08-20
+
+### Hierarchical Memory System (memory_tier.h / memory_tier.cpp)
+- New three-tier memory architecture replacing the Python-bridge RAM calls
+  in `/chat`:
+  - **L1 Working Memory** — thread-safe `std::deque` window (default 12
+    turns) serialized directly into the LLM context. On overflow, the
+    evicted turn is promoted to L2.
+  - **L2 Episodic Memory** — in-RAM vector store with cosine-similarity
+    retrieval. Dot product is AVX2-accelerated (`_mm256` intrinsics,
+    runtime-checked via `__builtin_cpu_supports`) with a scalar fallback.
+    Dependency-free embeddings use FNV-1a feature hashing (no ML model).
+  - **L3 Semantic / Cold Storage** — native SQLite (`dom_memory.db`, WAL,
+    prepared statements, RAII statement wrapper) persisting decayed
+    memories across restarts.
+- Formal Ebbinghaus decay: `R = M0 * exp(-lambda * t) + S`. Every L2 item
+  carries initial strength (M0, novelty-weighted), a `std::chrono`
+  timestamp, and a semantic relevance floor (S, from context similarity).
+- `MemoryManager` background GC worker (`std::thread` + `std::shared_mutex`
+  + `std::condition_variable`): periodically scores L2 items, evicts
+  `R < threshold` to L3, and trims L2 beyond capacity by weakest R.
+  Defaults `lambda=0.001/s`, threshold `0.35`, 60 s cadence — all
+  overridable via `DOM_MEM_*` env vars.
+- `/chat` now records turns into L1 in-process (no more `ram:push` /
+  `ram:load` bridge round-trips); assistant replies are stored cleaned.
+- `/status` now reports memory tier occupancy (`l1_working_turns`,
+  `l2_episodic`, `l3_cold_stored`, decay config).
+- The Python bridge keeps its `ram:*` commands for `dom_cloud` and
+  survival mode, which still use the `conversations` table.
+
 ## [3.0.0] — 2026-08-14
 
 ### Security Hardening

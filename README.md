@@ -8,6 +8,11 @@ A modular, terminal-native AI desktop assistant.
 - **Smart Routing** — User input is matched against module triggers first; unmatched queries fall through to a local or cloud LLM.
 - **Automation Scripts** — Email cleaning, system maintenance, and hardware monitoring built in.
 - **Todo & Notes** — Lightweight task and note management stored locally.
+- **Hierarchical Memory** — Three-tier memory (`memory_tier.h/.cpp`): L1
+  working memory (last 12 turns, in the LLM context), L2 episodic memory
+  (in-RAM vector store with AVX2 cosine similarity), L3 cold storage
+  (SQLite, `dom_memory.db`). L1→L2 promotion on overflow, L2→L3 eviction
+  driven by the Ebbinghaus forgetting curve `R = M0·e^(−λt) + S`.
 - **Custom Integrations** — Extend with your own modules, plugins, and system scripts.
 
 ## Quickstart
@@ -22,8 +27,8 @@ A modular, terminal-native AI desktop assistant.
 # Single message mode
 ./dom clean my emails
 
-# Build the C++ API server (requires libasio-dev, libcurl, nlohmann-json)
-g++ -O3 -std=c++17 main.cpp -lpthread -lcurl -o main
+# Build the C++ API server (requires libasio-dev, libcurl, nlohmann-json, sqlite3)
+g++ -O3 -std=c++17 main.cpp memory_tier.cpp -lpthread -lcurl -lsqlite3 -o main
 ```
 
 ## Running the Server

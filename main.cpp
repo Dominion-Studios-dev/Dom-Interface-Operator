@@ -23,6 +23,8 @@
 #include <ctime>
 #include <filesystem>
 
+#include "memory_tier.h"  // L1/L2/L3 hierarchical memory (replaces RAM bridge)
+
 using json = nlohmann::json;
 
 // ============================================================================
@@ -360,12 +362,15 @@ void sendNtfyNotification(const std::string& message) {
 }
 
 // ============================================================================
-// STATE & MEMORY MANAGERS (RAM / HDD)
+// STATE & MEMORY MANAGERS (HDD long-term store via the Python bridge)
+//
+// NOTE: The conversational "RAM" layer (the 12-turn working memory) no longer
+// lives in the SQLite `conversations` table via the bridge — it is now the
+// in-process L1 WorkingMemory tier of memory_tier.h/.cpp (MemoryManager),
+// which additionally provides episodic L2 + cold L3 tiers. The bridge below
+// remains ONLY for the long-term HDD key/value store ([SAVE:]/[RECALL:]
+// tags), which is a separate concern from the hierarchical memory system.
 // ============================================================================
-void updateRAM(const std::string& role, const std::string& content) {
-    execDbBridge({"ram:push", role, content, "root"});
-}
-
 void checkAndSaveToHDD(const std::string& reply) {
     static const std::regex saveRegex("\\[SAVE:\\s*([^=]+)=([^\\]]+)\\]");
     std::smatch match;
@@ -589,7 +594,24 @@ int main() {
     sweepStaleVoiceFiles();
 
     execDbBridge({"init"});
-    execDbBridge({"ram:clear", "root"});
+
+    // ── Hierarchical memory system (L1 working / L2 episodic / L3 cold) ────
+    // Replaces the old Python-bridge RAM calls in /chat. Construction opens
+    // the L3 SQLite file and spawns the background decay-GC worker; failure
+    // to open the DB is fatal (memory is core to the assistant's function).
+    std::unique_ptr<dommem::MemoryManager> memory;
+    try {
+        memory = std::make_unique<dommem::MemoryManager>(dommem::Config::fromEnv());
+        logInfo("Memory system online (L1 window=" +
+                std::to_string(memory->config().l1Capacity) +
+                " | L2 episodes=" + std::to_string(memory->config().l2Capacity) +
+                " | L3 db=" + memory->config().dbPath +
+                " | lambda=" + std::to_string(memory->config().lambda) +
+                " | evict_R<" + std::to_string(memory->config().evictThreshold) + ")");
+    } catch (const std::exception& e) {
+        logErr(std::string("Failed to initialize memory system: ") + e.what());
+        return 1;
+    }
 
     // Start WebSocket telemetry broadcaster
     startTelemetryBroadcaster();
@@ -610,8 +632,8 @@ int main() {
         return res;
     });
 
-    // Route 3: Status Endpoint (uptime, counters, connectivity)
-    CROW_ROUTE(app, "/status")([](){
+    // Route 3: Status Endpoint (uptime, counters, connectivity, memory tiers)
+    CROW_ROUTE(app, "/status")([&memory](){
         const long uptimeSeconds = static_cast<long>(
             std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::steady_clock::now() - g_startTime).count());
@@ -635,6 +657,16 @@ int main() {
         status["port"] = port_env ? std::stoi(port_env) : 7860;
         status["groq_model"] = "llama-3.1-8b-instant";
         status["time"] = currentTimestamp();
+
+        // Hierarchical memory tier occupancy (L1 hot / L2 episodic / L3 cold)
+        const dommem::MemoryManager::Stats memStats = memory->stats();
+        status["memory"] = {
+            {"l1_working_turns", memStats.l1_turns},
+            {"l2_episodic", memStats.l2_episodes},
+            {"l3_cold_stored", memStats.l3_stored},
+            {"decay_lambda", memory->config().lambda},
+            {"evict_threshold", memory->config().evictThreshold},
+        };
 
         crow::response res;
         res.code = 200;
@@ -661,7 +693,7 @@ int main() {
         });
 
     // Route 5: Chat API Endpoint (with Authorization + Async probes)
-    CROW_ROUTE(app, "/chat").methods(crow::HTTPMethod::POST)([apiKey, masterSecret](const crow::request& req){
+    CROW_ROUTE(app, "/chat").methods(crow::HTTPMethod::POST)([apiKey, masterSecret, &memory](const crow::request& req){
         // --- REQUEST BOOKKEEPING ---
         g_requestCount.fetch_add(1);
         logInfo("[CHAT] request from " + req.remote_ip_address +
@@ -702,12 +734,15 @@ int main() {
         }
 
         // --- Core Execution Logic ---
-        updateRAM("user", userInput);
+        // L1 working memory: record the user turn; overflow promotes the
+        // oldest turn into L2 episodic memory automatically.
+        memory->addTurn("user", userInput);
 
+        // Serialize the current L1 window (oldest -> newest) into the
+        // LLM context array. Replaces the old ram:load bridge call.
         json messagesArray = json::array();
-        std::string ramJson = captureDbBridge({"ram:load", "root"});
-        if (!ramJson.empty()) {
-            try { messagesArray = json::parse(ramJson); } catch(...) {}
+        for (const auto& turn : memory->context()) {
+            messagesArray.push_back({{"role", turn.role}, {"content", turn.content}});
         }
 
         std::string customRules = loadCustomRules();
@@ -754,7 +789,7 @@ int main() {
         }
 
         if (isLongRun) {
-            updateRAM("assistant", "Task initiated, Master. Running in background...");
+            memory->addTurn("assistant", "Task initiated, Master. Running in background...");
             json responseBody;
             responseBody["reply"] = "Task initiated, Master. Running in background...";
             crow::response res;
@@ -769,9 +804,8 @@ int main() {
         std::string telemetryStatus = processTelemetryProbes(domReply);
         if (!telemetryStatus.empty()) {
             json transientArray = json::array();
-            std::string transientJson = captureDbBridge({"ram:load", "root"});
-            if (!transientJson.empty()) {
-                try { transientArray = json::parse(transientJson); } catch(...) {}
+            for (const auto& turn : memory->context()) {
+                transientArray.push_back({{"role", turn.role}, {"content", turn.content}});
             }
             transientArray.insert(transientArray.begin(), systemPrompt);
             
@@ -785,9 +819,11 @@ int main() {
             }
         }
 
-        updateRAM("assistant", domReply);
-
         std::string output = cleanOutputText(domReply);
+
+        // L1 working memory: record the assistant turn (cleaned text — the
+        // raw tags were consumed above and are meaningless to future turns).
+        memory->addTurn("assistant", output);
         speakText(output);
 
         json responseBody;

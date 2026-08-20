@@ -644,7 +644,6 @@ int main() {
             wsClients = g_wsConnections.size();
         }
 
-        const char* bind_env = std::getenv("DOM_BIND");
         const char* port_env = std::getenv("PORT");
 
         json status;
@@ -653,8 +652,10 @@ int main() {
         status["uptime_seconds"] = uptimeSeconds;
         status["requests_served"] = g_requestCount.load();
         status["websocket_clients"] = wsClients;
-        status["bind_address"] = (bind_env && *bind_env) ? bind_env : "127.0.0.1";
-        status["port"] = port_env ? std::stoi(port_env) : 7860;
+        // Render binds the container to the public interface: the server is
+        // always listening on 0.0.0.0 (see app.bindaddr("0.0.0.0") below).
+        status["bind_address"] = "0.0.0.0";
+        status["port"] = port_env ? std::stoi(port_env) : 10000;
         status["groq_model"] = "llama-3.1-8b-instant";
         status["time"] = currentTimestamp();
 
@@ -836,20 +837,18 @@ int main() {
         return res;
     });
 
-    // Detect Render/Hugging Face assigned port dynamically
+    // Detect Render/Hugging Face assigned port dynamically (fallback 10000)
     const char* port_env = std::getenv("PORT");
-    int port = port_env ? std::stoi(port_env) : 7860;
+    int port = port_env ? std::stoi(port_env) : 10000;
 
-    // Bind address hardening: default to loopback only. Cloud deployments
-    // override with DOM_BIND=0.0.0.0 in their environment.
-    const char* bind_env = std::getenv("DOM_BIND");
-    std::string bindAddr = (bind_env && *bind_env) ? bind_env : "127.0.0.1";
-
+    // Bind explicitly to 0.0.0.0: Render's port-scan health check probes the
+    // container's public interface, and Crow's default loopback bind
+    // (127.0.0.1) would never be reached, failing the deploy.
     logInfo("=== Dom Interface Initialized ===");
-    logInfo("API Web Server active on " + bindAddr + ":" + std::to_string(port) + "...");
+    logInfo("API Web Server active on 0.0.0.0:" + std::to_string(port) + "...");
     logInfo("GROQ model: llama-3.1-8b-instant | Custom rules: " + RULES_FILE);
 
-    app.bindaddr(bindAddr).port(port).multithreaded().run();
+    app.bindaddr("0.0.0.0").port(port).multithreaded().run();
 
     // Graceful shutdown: crow handles SIGINT/SIGTERM internally and returns
     // here once the server has stopped accepting traffic.
